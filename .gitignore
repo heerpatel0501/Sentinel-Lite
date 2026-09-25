@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+venv/
+backend/venv/
+.venv/
+env/
+
+# Python cache & build artifacts
+__pycache__/
+backend/__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Local databases
+*.db
+*.sqlite3
+backend/*.db
+backend/sentinel.db
+
+# Environment variables & secrets
+.env
+*.env
+backend/.env
+!.env.example
+!backend/.env.example
+
+# Playwright & test recording scratch outputs
+videos/
+record_demo.py
+record_demo2.py
+final_hackathon_demo.webm
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
