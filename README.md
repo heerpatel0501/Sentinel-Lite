@@ -30,27 +30,6 @@ Historically, these cameras operate in departmental silos using proprietary, inc
 
 ---
 
-## 👨‍💻 Lead Contributor & Developer
-
-<div align="center">
-
-### **Heer Patel**
-**Full-Stack Architect, AI Systems Engineer & Core Developer**  
-GitHub: [@heerpatel0501](https://github.com/heerpatel0501) • Repository: [Sentinel-Lite](https://github.com/heerpatel0501/Sentinel-Lite)
-
-</div>
-
-### 🌟 Key Contributions by Heer Patel:
-
-- **End-to-End System Architecture**: Conceptualized, designed, and developed the entire Sentinel-Lite platform from database schema design to the reactive web dashboard.
-- **VMS Federation Adapter Pattern**: Engineered the core Python backend adapter pattern (`vms_adapters.py`) with an extensible abstract base class that decouples proprietary vendor protocols (Milestone, Hikvision, Genetec, Dahua, and LiveGrid HLS) from client consumers.
-- **Computer Vision & AI Pipeline Integration**: Implemented the Ultralytics YOLOv8 inference engine (`/detect` endpoint) in FastAPI, optimizing video processing to 1 frame-per-second intervals for rapid execution, and created the high-precision HTML5 `<canvas>` dynamic bounding box overlay in React.
-- **Interactive Geospatial Dashboard**: Built the responsive frontend using React, Vite, and MapLibre GL JS, featuring custom multi-department color-coded vector pins, interactive popup telemetry, and state-wide cluster visualization.
-- **Cross-Department Alert Correlation**: Designed the threat detection feed correlating ANPR license plate sightings across Police, RTO, and Municipal boundaries.
-- **Zero-Friction Dual-Mode Deployment**: Engineered zero-dependency native execution with SQLite auto-seeding for rapid local execution, alongside full production-grade Docker Compose definitions.
-
----
-
 ## 🚀 Key Features
 
 ### 1. Model 1: State-wide Camera Registry (Geospatial Core)
