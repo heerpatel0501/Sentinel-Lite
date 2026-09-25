@@ -114,45 +114,77 @@ INSERT INTO watchlist (plate_text, reason, added_by_department, active) VALUES
 ('GJ06CD5555', 'stolen', 'Police', FALSE)
 ON CONFLICT DO NOTHING;
 
+-- Stream Health & Telemetry Tracking
+CREATE TABLE IF NOT EXISTS stream_health (
+    id SERIAL PRIMARY KEY,
+    camera_id INTEGER REFERENCES cameras(id),
+    status VARCHAR(50) DEFAULT 'active',
+    codec VARCHAR(20) DEFAULT 'H.264',
+    resolution VARCHAR(20) DEFAULT '1080p',
+    last_pts DOUBLE PRECISION DEFAULT 0.0,
+    reconnect_attempts INTEGER DEFAULT 0,
+    fps_actual DOUBLE PRECISION DEFAULT 0.0,
+    last_heartbeat TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- =============================================================================
--- 6. VEHICLE_MOVEMENTS (Powers Cross-Department Correlation)
+-- 6. VEHICLE_MOVEMENTS (Powers Cross-Department Correlation with Evidence Traceability)
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS vehicle_movements (
     id SERIAL PRIMARY KEY,
     plate_text VARCHAR(50) NOT NULL,
     camera_id INTEGER REFERENCES cameras(id),
     department_id INTEGER REFERENCES departments(id),
+    detection_id INTEGER REFERENCES vehicle_detections(id),
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO vehicle_movements (plate_text, camera_id, department_id, timestamp) VALUES
+INSERT INTO vehicle_movements (plate_text, camera_id, department_id, detection_id, timestamp) VALUES
 -- Target 1: GJ01-AB-1234 (seen across Police, RTO, Municipal)
-('GJ01-AB-1234', 1, 1, CURRENT_TIMESTAMP - INTERVAL '45 minutes'),
-('GJ01-AB-1234', 2, 2, CURRENT_TIMESTAMP - INTERVAL '30 minutes'),
-('GJ01-AB-1234', 4, 4, CURRENT_TIMESTAMP - INTERVAL '10 minutes'),
+('GJ01-AB-1234', 1, 1, 1, CURRENT_TIMESTAMP - INTERVAL '45 minutes'),
+('GJ01-AB-1234', 2, 2, NULL, CURRENT_TIMESTAMP - INTERVAL '30 minutes'),
+('GJ01-AB-1234', 4, 4, NULL, CURRENT_TIMESTAMP - INTERVAL '10 minutes'),
 
 -- Target 2: GJ05-XX-9999 (seen across Police, GSRTC)
-('GJ05-XX-9999', 9, 1, CURRENT_TIMESTAMP - INTERVAL '60 minutes'),
-('GJ05-XX-9999', 11, 3, CURRENT_TIMESTAMP - INTERVAL '20 minutes'),
+('GJ05-XX-9999', 9, 1, NULL, CURRENT_TIMESTAMP - INTERVAL '60 minutes'),
+('GJ05-XX-9999', 11, 3, 2, CURRENT_TIMESTAMP - INTERVAL '20 minutes'),
 
 -- Target 3: GJ03-MC-4567 (seen across RTO, Municipal)
-('GJ03-MC-4567', 6, 2, CURRENT_TIMESTAMP - INTERVAL '75 minutes'),
-('GJ03-MC-4567', 8, 4, CURRENT_TIMESTAMP - INTERVAL '35 minutes'),
+('GJ03-MC-4567', 6, 2, NULL, CURRENT_TIMESTAMP - INTERVAL '75 minutes'),
+('GJ03-MC-4567', 8, 4, NULL, CURRENT_TIMESTAMP - INTERVAL '35 minutes'),
 
 -- Target 4: GJ18-ZZ-0001 (seen across Police, RTO)
-('GJ18-ZZ-0001', 17, 1, CURRENT_TIMESTAMP - INTERVAL '80 minutes'),
-('GJ18-ZZ-0001', 18, 2, CURRENT_TIMESTAMP - INTERVAL '40 minutes'),
+('GJ18-ZZ-0001', 17, 1, NULL, CURRENT_TIMESTAMP - INTERVAL '80 minutes'),
+('GJ18-ZZ-0001', 18, 2, NULL, CURRENT_TIMESTAMP - INTERVAL '40 minutes'),
 
 -- Target 5: GJ06-CD-5555 (seen across Police, GSRTC)
-('GJ06-CD-5555', 13, 1, CURRENT_TIMESTAMP - INTERVAL '95 minutes'),
-('GJ06-CD-5555', 15, 3, CURRENT_TIMESTAMP - INTERVAL '50 minutes'),
+('GJ06-CD-5555', 13, 1, NULL, CURRENT_TIMESTAMP - INTERVAL '95 minutes'),
+('GJ06-CD-5555', 15, 3, NULL, CURRENT_TIMESTAMP - INTERVAL '50 minutes'),
 
 -- Routine traffic sightings
-('GJ27-AA-1122', 3, 3, CURRENT_TIMESTAMP - INTERVAL '110 minutes'),
-('GJ02-BB-3344', 10, 2, CURRENT_TIMESTAMP - INTERVAL '90 minutes'),
-('GJ04-EE-7788', 16, 4, CURRENT_TIMESTAMP - INTERVAL '65 minutes'),
-('GJ01-XY-4455', 1, 1, CURRENT_TIMESTAMP - INTERVAL '50 minutes'),
-('GJ01-XY-4455', 2, 2, CURRENT_TIMESTAMP - INTERVAL '15 minutes')
+('GJ27-AA-1122', 3, 3, NULL, CURRENT_TIMESTAMP - INTERVAL '110 minutes'),
+('GJ02-BB-3344', 10, 2, NULL, CURRENT_TIMESTAMP - INTERVAL '90 minutes'),
+('GJ04-EE-7788', 16, 4, NULL, CURRENT_TIMESTAMP - INTERVAL '65 minutes'),
+('GJ01-XY-4455', 1, 1, NULL, CURRENT_TIMESTAMP - INTERVAL '50 minutes'),
+('GJ01-XY-4455', 2, 2, NULL, CURRENT_TIMESTAMP - INTERVAL '15 minutes')
+ON CONFLICT DO NOTHING;
+
+-- Evidence Records (Metadata & URI links; zero video stored in DB)
+CREATE TABLE IF NOT EXISTS evidence_records (
+    id SERIAL PRIMARY KEY,
+    detection_id INTEGER REFERENCES vehicle_detections(id),
+    plate_text VARCHAR(50) NOT NULL,
+    file_path VARCHAR(500) NOT NULL,
+    uri_reference VARCHAR(500) NOT NULL,
+    captured_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    pts_timestamp DOUBLE PRECISION DEFAULT 0.0,
+    file_size_bytes INTEGER DEFAULT 0,
+    sha256_hash VARCHAR(64)
+);
+
+INSERT INTO evidence_records (detection_id, plate_text, file_path, uri_reference, pts_timestamp, file_size_bytes) VALUES
+(1, 'GJ01-AB-1234', 'evidence/snapshots/GJ01-AB-1234_cam1.jpg', '/evidence/snapshots/GJ01-AB-1234_cam1.jpg', 15.2, 42100),
+(2, 'GJ05-XX-9999', 'evidence/snapshots/GJ05-XX-9999_cam11.jpg', '/evidence/snapshots/GJ05-XX-9999_cam11.jpg', 32.8, 51400)
 ON CONFLICT DO NOTHING;
 
 -- =============================================================================

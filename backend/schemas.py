@@ -52,10 +52,11 @@ class VehicleDetection(VehicleDetectionBase):
     class Config:
         from_attributes = True
 
-# 3. plates (MOCKED for submission)
+# 3. plates (REAL OCR PIPELINE)
 class PlateBase(BaseModel):
     detection_id: Optional[int] = None
     plate_text: str
+    normalized_plate: Optional[str] = None
     ocr_confidence: float
     plate_bounding_box: Optional[List[float]] = None
 
@@ -79,11 +80,12 @@ class Watchlist(WatchlistBase):
     class Config:
         from_attributes = True
 
-# 5. vehicle_movements (MOCKED seed data - powers cross-dept correlation)
+# 5. vehicle_movements (with full evidence traceability via detection_id)
 class VehicleMovementBase(BaseModel):
     plate_text: str
     camera_id: int
     department_id: int
+    detection_id: Optional[int] = None
 
 class VehicleMovement(VehicleMovementBase):
     id: int
@@ -91,6 +93,55 @@ class VehicleMovement(VehicleMovementBase):
 
     class Config:
         from_attributes = True
+
+# Stream Health & Telemetry
+class StreamHealthBase(BaseModel):
+    camera_id: int
+    status: str
+    codec: str
+    resolution: str
+    last_pts: float
+    reconnect_attempts: int
+    fps_actual: float
+
+class StreamHealth(StreamHealthBase):
+    id: int
+    last_heartbeat: datetime
+
+    class Config:
+        from_attributes = True
+
+# Evidence Records
+class EvidenceRecordBase(BaseModel):
+    detection_id: Optional[int] = None
+    plate_text: str
+    file_path: str
+    uri_reference: str
+    pts_timestamp: float
+    file_size_bytes: int
+    sha256_hash: Optional[str] = None
+
+class EvidenceRecord(EvidenceRecordBase):
+    id: int
+    captured_at: datetime
+
+    class Config:
+        from_attributes = True
+
+# Authorized Synthetic Vehicle Profile
+class VehicleProfile(BaseModel):
+    plate_number: str
+    owner_name: str
+    registration_date: str
+    vehicle_class: str
+    maker_model: str
+    fuel_type: str
+    engine_no_hash: str
+    chassis_no_hash: str
+    insurance_valid_until: str
+    rto_office: str
+    contact_phone_masked: str
+    is_synthetic_authorized_data: bool = True
 
 # 6. alerts (MOCKED seed data)
 class AlertBase(BaseModel):
