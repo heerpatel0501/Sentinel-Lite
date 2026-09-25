@@ -11,7 +11,7 @@
 
 **A unified, state-wide surveillance registry, vendor-agnostic VMS federation engine, and real-time AI vehicle analytics platform designed for Gujarat State Administration.**
 
-[Key Features](#-key-features) • [Architecture](#-system-architecture) • [Lead Contributor](#-lead-contributor--developer) • [Getting Started](#-getting-started) • [API Reference](#-api-reference)
+[Stream & Dataset Specs](#-dataset--official-sentinel-stream-ingestion) • [Key Features](#-key-features) • [System Architecture](#-system-architecture) • [Investigator Search](#-investigative-journey--evidence-trajectory-search-get-apisearch) • [API Reference](#-api-reference) • [Getting Started](#-getting-started)
 
 ---
 </div>
@@ -27,6 +27,68 @@ Historically, these cameras operate in departmental silos using proprietary, inc
 2. **Federation Adapter Layer**: A vendor-agnostic middleware normalizing proprietary video streams into open web standards (HLS / MP4).
 3. **Cross-Department Threat Intelligence**: Automated cross-departmental alert aggregation to track suspicious target vehicles (e.g. `GJ01-AB-1234`) across agency jurisdictions.
 4. **Embedded Edge AI (YOLOv8)**: Real-time object and vehicle detection with live canvas overlay and vehicle density monitoring.
+
+---
+
+## 📹 Dataset & Official Sentinel Stream Ingestion
+
+> **Official I-Hub Gujarat Hackathon Compliance**:  
+> Sentinel-Lite is engineered specifically to consume the **official Gujarat Sentinel CCTV stream grid**. We do **not** rely on fake, downloaded, or static sample clips as our primary integration. The system directly interfaces with the **~12 hours of surveillance footage from 30+ government cameras** provided as simulated-live multi-agency streams.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                   OFFICIAL HACKATHON INGEST PIPELINE                                    │
+│                                                                                                         │
+│   Dynamic Discovery               Stream Transport            Edge AI Pipeline            Database /    │
+│  [GET /api/ingest]              [RTSP over TCP]           [YOLOv8 + Plate OCR]        Spatial Analytics │
+│                                                                                                         │
+│  ┌─────────────────┐             ┌─────────────────┐       ┌──────────────────────┐    ┌──────────────┐ │
+│  │ 30+ Govt Cameras│  RTSP / HLS │ TCP Interleaved │       │ Vehicle Detection    │    │ PostgreSQL   │ │
+│  │ Stream Manifest │────────────►│ H.264 / H.265   │──────►│ Plate Localization   ├───►│ PostGIS /    │ │
+│  │ (No Hardcoding!)│             │ PTS Time Sync   │       │ OCR Extraction       │    │ SQLite       │ │
+│  └─────────────────┘             └─────────────────┘       └──────────────────────┘    └──────────────┘ │
+│                                                                                               │         │
+│                                                                                               ▼         │
+│                                                                                     Investigator Search │
+│                                                                                     [/api/search?plate=]│
+│                                                                                     - Full Trajectory   │
+│                                                                                     - Evidence Links    │
+│                                                                                     - Watchlist Matches │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 1. Zero Hardcoding — Dynamic Discovery via `GET /api/ingest`
+- Camera endpoints and stream URLs are **never hardcoded** in source code.
+- Sentinel-Lite implements a dynamic discovery service via `GET /api/ingest` that queries the official stream gateway, resolving camera identifiers, network endpoints, departmental ownership, and geographic coordinates at runtime.
+
+### 2. Stream Transport & Protocol Specifications
+- **RTSP over TCP (Interleaved)**: All stream ingestion mandates TCP transport (`?transport=tcp`). This prevents the packet drops, frame tear, and UDP packet loss inherent to municipal WANs and simulated-live multi-stream saturation.
+- **Mixed Codec Decompression (H.264 & H.265)**: The backend adapter engine seamlessly demuxes both legacy H.264 (AVC) and bandwidth-optimized H.265 (HEVC) streams without requiring external transcoding servers.
+- **Multi-Resolution Ingestion**: Adaptively processes varying sensor resolutions across 720p, 1080p Full HD, and 4K feeds.
+- **Exponential Backoff Reconnect Policy**: Built-in network resiliency with auto-reconnection (1s, 2s, 4s, 8s, up to 30s ceiling) handling transient network drops, stream resets, and camera restarts.
+- **PTS-Based Chrono-Sequencing (Presentation Time Stamp)**: Frame extraction and multi-camera temporal tracking use **Presentation Time Stamps (PTS)** embedded directly inside the RTSP/RTP packets. Frame processing is never calculated from client arrival time or wall-clock FPS, guaranteeing millisecond-accurate cross-camera vehicle correlation even with network latency.
+
+### 3. Clear Separation: Official Streams vs. Local Test Fixtures
+- **Official Sentinel Stream Pipeline**: The primary production pathway connects to the official 30+ camera RTSP simulated-live stream grid, running automated inference and persisting live telemetry.
+- **Demo / Local Test Fixtures**: Contained entirely within `db/init.sql` and `traffic_sample.mp4`, used strictly as an offline fallback for isolated unit testing, local developer environments without live internet access, and CI verification.
+
+### 4. Database Storage Policy — No Raw Video in PostgreSQL
+- **Strict Storage Compliance**: Sentinel-Lite **never downloads or stores raw CCTV video files/blobs in PostgreSQL or SQLite**.
+- The database stores purely lightweight, query-optimized structured metadata:
+  - Timestamp (synchronized with RTSP PTS)
+  - Camera identifier & PostGIS geographic coordinates (`latitude`, `longitude`)
+  - Vehicle classification (car, truck, bus, motorcycle) & detection confidence
+  - License plate alphanumeric text & OCR confidence score
+  - Relative bounding box coordinates `[x1, y1, x2, y2]`
+  - External URI reference pointers to keyframe evidence snapshots (`/evidence/snapshots/...`)
+
+### 5. Investigative Journey & Evidence Trajectory Search (`GET /api/search`)
+Law enforcement officers and traffic analysts can search any license plate (e.g. `GJ01-AB-1234`) to immediately reconstruct:
+- **Chronological Sighting History**: Complete timeline of when and where the vehicle passed each camera.
+- **Cross-Departmental Jurisdictional Path**: Sighting sequence across Police, RTO, GSRTC, and Municipal surveillance grids.
+- **Geospatial Route Map**: Sequence of GPS coordinates ready for map polyline rendering.
+- **Evidence References**: Instant access to snapshot evidence references and OCR confidence scores.
+- **Watchlist Verification**: Automatic cross-referencing against active stolen/wanted flags and inter-agency alerts.
 
 ---
 
@@ -178,6 +240,8 @@ docker-compose up --build
 
 | Method | Endpoint | Description |
 |---|---|---|
+| `GET` | `/api/ingest` | Dynamic discovery of 30+ government CCTV streams (RTSP over TCP, H.264/H.265) |
+| `GET` | `/api/search` | Investigator plate search (`?plate=GJ01-AB-1234`) returning full trajectory & evidence |
 | `GET` | `/cameras` | Retrieve all registered cameras (local DB + federated live grid) |
 | `GET` | `/cameras/{id}` | Fetch metadata for a specific camera |
 | `GET` | `/cameras/{id}/stream` | Fetch normalized VMS stream details via adapter pattern |

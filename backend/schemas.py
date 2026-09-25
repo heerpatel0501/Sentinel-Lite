@@ -169,3 +169,25 @@ class VMSStreamResponse(BaseModel):
     stream_url: str
     status: str
     resolution: str
+
+# ==============================================================================
+# Investigation & Stream Ingestion Schemas
+# ==============================================================================
+
+class JourneyPoint(BaseModel):
+    timestamp: Union[str, datetime]
+    camera_id: Union[int, str]
+    camera_name: str
+    department: str
+    latitude: float
+    longitude: float
+    evidence_reference: Optional[str] = None
+    confidence: Optional[float] = None
+
+class InvestigationResult(BaseModel):
+    plate_text: str
+    watchlist_status: Optional[str] = None
+    total_sightings: int
+    departments_involved: List[str]
+    journey_history: List[JourneyPoint]
+    active_alerts: List[str]
