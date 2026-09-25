@@ -226,4 +226,4 @@ Sentinel-Lite/
 
 ## 📄 License
 
-Developed for the **I-Hub Gujarat Hackathon**. Built with ❤️ by **[Heer Patel](https://github.com/heerpatel0501)**.
+Developed for the **I-Hub Gujarat Hackathon**.
