@@ -181,9 +181,43 @@ docker-compose up --build
 | `GET` | `/cameras` | Retrieve all registered cameras (local DB + federated live grid) |
 | `GET` | `/cameras/{id}` | Fetch metadata for a specific camera |
 | `GET` | `/cameras/{id}/stream` | Fetch normalized VMS stream details via adapter pattern |
-| `GET` | `/alerts` | Get real-time cross-departmental alerts and target plate tracking |
+| `GET` | `/alerts` | Get real-time cross-departmental alerts queried from SQLite database |
+| `GET` | `/watchlist` | Retrieve state-wide flagged, stolen, and wanted vehicle plate registry |
+| `GET` | `/movements` | Query cross-department vehicle sightings & movement tracking trail |
+| `GET` | `/departments` | List connected Gujarat government departments (Police, RTO, GSRTC, etc.) |
+| `GET` | `/detections` | Real-time vehicle detections recorded by YOLOv8 pipeline |
 | `POST` | `/detect` | Run YOLOv8 vehicle detection on uploaded MP4 or remote HLS stream |
-| `GET` | `/health` | Health check endpoint |
+| `GET` | `/health` | System health, uptime metrics, and department telemetry |
+
+---
+
+## 🗄️ End-to-End Pipeline Database Schema
+
+```
+[Cameras] (CCTV Registry)
+   │ 1:N
+   ▼
+[Vehicle Detections] ──(REAL via YOLOv8 /detect)──► [Plates + OCR] ──(MOCKED via ANPR Corpus)
+   │                                                     │
+   ▼                                                     ▼
+[Vehicle Movements] ──(Cross-Dept Correlation)────► [Watchlist Lookup]
+   │                                                     │
+   └─────────────────────────┬───────────────────────────┘
+                             ▼
+                     [Alerts Engine] ──► (Police, RTO, GSRTC, Municipal)
+                             │
+                             ▼
+                   [Users & Audit Logs] ──► (DPDP Act Compliance)
+```
+
+1. **`cameras`**: Centralized CCTV hardware registry across Gujarat.
+2. **`departments`**: Administrative owners (Police, RTO, GSRTC, Municipal Corporation, Panchayat).
+3. **`vehicle_detections`**: **[REAL]** Populated dynamically by live YOLOv8 `/detect` inference with relative bounding boxes, timestamps, and confidence scores.
+4. **`plates`**: **[MOCKED for submission]** Ready for Indian ANPR OCR Corpus dataset integration in the next phase; mocked with realistic Gujarat plates (`GJ01-AB-1234`, etc.).
+5. **`watchlist`**: **[MOCKED seed data]** Real-time lookup for stolen, wanted, and flagged vehicles.
+6. **`vehicle_movements`**: Powers cross-agency vehicle correlation when the same vehicle is observed across multiple departments' cameras.
+7. **`alerts`**: Real relational table replacing hardcoded JSON, tracking inter-agency flags (`cross_department`, `watchlist_match`, `speeding`).
+8. **`users` & `audit_logs`**: Role-based access and DPDP Act compliance audit trails.
 
 ---
 
