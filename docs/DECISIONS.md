@@ -1,37 +1,55 @@
-# Architecture Decision Records (ADRs)
+# Architecture Decisions
 
-## ADR-001: SQLite for dev, PostgreSQL+PostGIS for production
-**Decision:** Run natively on SQLite during development; target PostgreSQL+PostGIS for production.  
-**Reason:** Docker was not available during initial development, and native SQLite meant zero setup friction. PostGIS is needed for real geospatial queries and concurrent multi-department writes, which SQLite cannot handle at production scale. ackend/database.py includes automatic fallback so both work seamlessly.
+## ADR-001: FastAPI for the core backend
+**Status:** Accepted
 
-## ADR-002: FastAPI over Flask/Django
-**Decision:** Use FastAPI for the backend.  
-**Reason:** Native async support handles multiple simultaneous camera streams without blocking; auto-generated OpenAPI docs reduce documentation overhead; Pydantic validation is built in.
+FastAPI is selected as the primary backend framework because the project already identifies Python/FastAPI as a candidate and the AI integration naturally benefits from Python interoperability.
 
-## ADR-003: MapLibre GL JS + OpenStreetMap over Google Maps
-**Decision:** Use MapLibre GL JS with OpenStreetMap tiles for the GIS registry map.  
-**Reason:** No API key or billing required, fully open-source, and sufficient for pin-based camera visualization. Avoids vendor lock-in for a government platform.
+## ADR-002: PostgreSQL as system of record
+**Status:** Accepted
 
-## ADR-004: Vendor adapter pattern for VMS federation
-**Decision:** Implement VMS federation as an abstract VMSProvider base class with one subclass per vendor, rather than branching logic per vendor inline.  
-**Reason:** This is the actual technical substance of 'Model 3' — new vendors are added by writing one new class, without touching existing code. Makes the system genuinely extensible, not just demo-shaped.
+The project explicitly identifies PostgreSQL for structured application state. AWS RDS is the managed deployment target proposed by the team.
 
-## ADR-005: Decoupled AI Pipeline with EasyOCR & Dedicated Plate Detection
-**Decision:** Implement real vehicle detection with Ultralytics YOLOv8, combined with high-confidence license plate localization and EasyOCR character recognition.  
-**Reason:** Replaces simple heuristic contours with real neural text recognition and standardizes Indian plates (GJ01-AB-1234), outputting cryptographic SHA-256 evidence crops.
+## ADR-003: RabbitMQ for durable event processing
+**Status:** Accepted
 
-## ADR-006: RabbitMQ event-correlation service kept separate
-**Decision:** A teammate's RabbitMQ-based event correlation microservice (motion+door correlation, loitering/tailgating detection) is built and tested standalone but not merged into the core app yet.  
-**Reason:** Adding a new infrastructure dependency (RabbitMQ, Docker) late in development risked destabilizing a working core demo. It is tracked as future work (Phase 9 in TASKS.md) with a clear integration path (HTTP bridge into the alerts table) once the core is stable.
+The project defines RabbitMQ as the event-bus concept for normalized event processing and correlation.
 
-## ADR-007: hls.js for live stream playback
-**Decision:** Use hls.js on the frontend to play .m3u8 HLS streams.  
-**Reason:** Browsers do not natively play HLS outside Safari; hls.js is the standard, lightweight solution and works with both mocked and real government test-grid streams.
+## ADR-004: Redis for realtime/cache responsibilities
+**Status:** Accepted
 
-## ADR-008: MediaMTX for RTSP-to-HLS and ONVIF Stream Relaying
-**Decision:** Integrate MediaMTX as a lightweight, low-latency relay sidecar in docker-compose.yml.  
-**Reason:** Web browsers cannot directly play raw RTSP/UDP streams. MediaMTX converts incoming RTSP streams into HLS/WebRTC with minimal CPU overhead, enabling seamless browser viewing while supporting container-internal networking (http://mediamtx:8888) and public browser access (http://localhost:8888).
+Redis/ElastiCache is used for cache and realtime fanout/transient state. It does not automatically replace RabbitMQ for durable worker processing.
 
-## ADR-009: PTS-Based Chrono-Sequencing over FPS/Arrival Time
-**Decision:** Frame synchronization and inter-camera tracking rely on Presentation Time Stamps (PTS) embedded in RTSP packets, rather than client frame arrival time or CAP_PROP_FPS.  
-**Reason:** Network jitter across municipal WANs causes variable frame arrival times. Using packet PTS guarantees millisecond-accurate cross-agency vehicle trajectory tracking regardless of network latency.
+## ADR-005: Modular monolith + workers
+**Status:** Accepted
+
+Keep the main backend as a modular FastAPI application and separate long-running processing into workers. This reduces deployment complexity while preserving domain boundaries.
+
+## ADR-006: Canonical model at connector boundary
+**Status:** Accepted
+
+Vendor-specific payloads are translated before they enter the core domain to protect downstream consumers from vendor coupling.
+
+## ADR-007: Versioned API
+**Status:** Accepted
+
+All external application endpoints start at `/api/v1` to make future changes manageable.
+
+## ADR-008: Three mock VMS for MVP
+**Status:** Accepted
+
+Three simulated sources provide a deterministic demonstration of federation before real vendor integrations are completed.
+
+## ADR-009: AI as replaceable service
+**Status:** Accepted
+
+AI inference stays behind a contract so model/framework changes do not require a rewrite of the backend.
+
+## Pending decisions
+
+- Exact AWS ingress choice: API Gateway vs NGINX/ALB combination.
+- Exact RabbitMQ hosting option.
+- Object storage provider/bucket policy for evidence.
+- Long-term retention periods.
+- Final ONVIF/vendor coverage.
+- Production HA/backup policy.

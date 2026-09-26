@@ -1,64 +1,102 @@
-# Tasks & Implementation Roadmap
+# Backend Implementation Plan
 
-## Phase 1: Foundation — DONE
-- [x] Initialize backend (FastAPI) + frontend (React/Vite)
-- [x] Configure Git, .gitignore, .env.example
-- [x] SQLite dev database with auto-seed on startup
-- [x] Docker Compose multi-container setup (db, backend, frontend, mediamtx)
+## Milestone 0 — Contracts — DONE
+- [x] Freeze camera schema
+- [x] Freeze VMS schema
+- [x] Freeze event schema
+- [x] Freeze candidate state machine
+- [x] Freeze investigation object
+- [x] Freeze REST endpoints (/api/v1)
+- [x] Freeze message envelope
+- [x] Freeze realtime event names
 
-## Phase 2: Camera Registry (Model 1) — DONE
-- [x] cameras table + GIS fields (lat/long, department, vendor, status, resolution)
-- [x] Seed 20 mock cameras across 5 Gujarat cities (Ahmedabad, Surat, Rajkot, Vadodara, Gandhinagar)
-- [x] MapLibre GL JS map with department-colored pins
-- [x] Interactive camera popup with video playback trigger
+## Milestone 1 — Core backend — DONE
+- [x] FastAPI application setup
+- [x] configuration and environment loading
+- [x] PostgreSQL connection + SQLite fallback
+- [x] migrations & schema compatibility
+- [x] departments
+- [x] users
+- [x] authentication (HMAC-SHA256 JWT)
+- [x] RBAC (Admin, Analyst, Viewer)
+- [x] health/readiness endpoints
 
-## Phase 3: VMS Federation (Model 3) — DONE
-- [x] VMSProvider abstract base class with async get_stream(camera) contract
-- [x] Vendor adapters: Milestone, Hikvision, Genetec, Dahua, LiveGrid
-- [x] Real ONVIF adapter (ONVIFProvider) with device discovery and RTSP URL extraction
-- [x] MediaMTX relay sidecar integration (internal container routing vs public browser playback)
-- [x] Official Sentinel RTSP simulated-live stream adapter (SentinelOfficialRTSPAdapter)
-- [x] Dynamic discovery endpoint (GET /api/ingest)
-- [x] Exponential backoff reconnect policy and PTS timing synchronization
+## Milestone 2 — Federation — DONE
+- [x] VMS CRUD (/api/v1/vms)
+- [x] connector interface (VMSProvider)
+- [x] mock Police connector (Milestone)
+- [x] mock Traffic connector (Hikvision)
+- [x] mock RTO connector (Genetec/Dahua)
+- [x] normalization service
+- [x] camera registry (/api/v1/cameras)
+- [x] connector health
+- [x] camera health
 
-## Phase 4: AI Computer Vision Pipeline — DONE
-- [x] Ultralytics YOLOv8 vehicle detection (car, 	ruck, us, motorcycle)
-- [x] Dedicated license plate detector & EasyOCR character recognition
-- [x] Standard Gujarat license plate normalization (GJ01-AB-1234)
-- [x] Forensic evidence snapshot storage with SHA-256 integrity hash
-- [x] Zero raw video storage in database (structured metadata + file URI pointers only)
+## Milestone 3 — Events — DONE
+- [x] event schema (CanonicalEvent)
+- [x] event ingestion API (POST /api/v1/events)
+- [x] idempotency & deduplication (source_id)
+- [x] event persistence
+- [x] cross-service event bridge (POST /api/events/correlate)
 
-## Phase 5: Database Schema & Migration — DONE
-- [x] Full schema: departments, vehicle_detections, plates, watchlist, vehicle_movements (with detection_id FK), alerts, users, audit_logs, stream_health, evidence_records
-- [x] SQLite runtime inspector migration in database.py (adds only missing columns, no invalid IF NOT EXISTS)
-- [x] PostgreSQL PostGIS DDL (db/init.sql) in 100% parity with SQLAlchemy models
-- [x] Cross-department alert seed data demonstrating correlation logic
+## Milestone 4 — Correlation — DONE
+- [x] camera relationship model
+- [x] time-window correlation
+- [x] related-event grouping
+- [x] candidate event creation (GET /api/v1/candidates)
+- [x] verify/reject APIs (POST /api/v1/candidates/{id}/verify, reject)
 
-## Phase 6: Security, RBAC & Privacy Governance — DONE
-- [x] Multi-tier RBAC (dmin, nalyst, iewer) enforced server-side
-- [x] Protected vehicle profile endpoint (/api/vehicle/{plate}/profile) requiring analyst/admin clearance
-- [x] Viewer role restricted with HTTP 403 Forbidden
-- [x] Statutory access audit logging (/api/audit-logs) aligning with DPDP Act 2023
-- [x] Protected ONVIF credentials (omitted from public Camera schema)
+## Milestone 5 — AI — DONE
+- [x] AI request schema
+- [x] AI result schema
+- [x] AI service adapter (SentinelAIEngine)
+- [x] vehicle detection (YOLOv8)
+- [x] license plate localization (CRAFT neural text ROI)
+- [x] plate/OCR integration (EasyOCR + Gujarat regex normalization)
+- [x] cryptographic evidence crop & SHA-256 integrity hashing
 
-## Phase 7: Investigator Workflow & UI — DONE
-- [x] Natural language investigator search (GET /api/search?plate=...)
-- [x] Chronological cross-department trajectory reconstruction
-- [x] Interactive InvestigatorModal.jsx in frontend dashboard
-- [x] Forensic evidence snapshot inspection card with SHA-256 verification
+## Milestone 6 — Investigation — DONE
+- [x] investigation CRUD (/api/v1/investigations)
+- [x] timeline aggregation (/api/v1/investigations/{id}/timeline)
+- [x] evidence metadata (/api/v1/investigations/{id}/evidence)
+- [x] integrity hash fields (SHA-256)
+- [x] audit integration (audit_logs & DPDP Act compliance)
 
-## Phase 8: Testing & Verification — DONE
-- [x] Automated 8-test verification suite (	est_e2e_pipeline.py)
-- [x] Clear separation of Local Simulated RTSP (PASS) vs Official Sandbox (BLOCKED / Credentials Required)
-- [x] Frontend production build verification (
-pm run build)
-- [x] Docker Compose configuration validation
+## Milestone 7 — Realtime — DONE
+- [x] WebSocket manager (ConnectionManager)
+- [x] event broadcasting (/ws and /api/v1/ws)
+- [x] camera health updates
+- [x] candidate updates (candidate.verified, candidate.rejected)
 
-## Phase 9: Open-Source Hygiene & Future Enhancements — DONE
-- [x] Add LICENSE file (MIT recommended)
-- [x] Add CONTRIBUTING.md
-- [x] Bridge standalone RabbitMQ event-correlation microservice into core alerts pipeline (POST /api/events/correlate)
-- [x] Implement production user authentication (HMAC-SHA256 JWT tokens & Bearer authorization)
-- [x] Command Center High-Contrast Dark UI with Natural Language Search pill & interactive RBAC selector
-- [x] Live automated polling for real-time alert streams in frontend dashboard
+## Milestone 8 — Deployment — DONE
+- [x] Docker image (backend, frontend)
+- [x] Docker Compose local stack (db, backend, frontend, mediamtx)
+- [x] MediaMTX RTSP-to-HLS relay sidecar
+- [x] smoke test & E2E verification
 
+## Milestone 9 — Hardening — DONE
+- [x] 8-stage automated test suite (test_e2e_pipeline.py)
+- [x] frontend production build validation (npm run build)
+- [x] structured audit trails
+- [x] AWS cloud formation / ECS deployment automation (deploy/aws/)
+- [x] load testing under 100+ concurrent RTSP channels & API queries (test_load_concurrency.py)
+
+## Milestone 10 — Production Hardening (Phase 11) — DONE
+- [x] Rate limiting middleware (sliding window, 300 RPM + 60 burst/sec)
+- [x] Security headers (OWASP: X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, Referrer-Policy, Permissions-Policy, HSTS, Cache-Control)
+- [x] Request ID injection (X-Request-ID, client passthrough or auto-generated UUID)
+- [x] Structured JSON access logging (timestamp, method, path, status, duration, client, request_id)
+- [x] Application metrics endpoint (/metrics — request counts, latency, error rates, top endpoints)
+- [x] Readiness probe (/ready — database connectivity + schema check for K8s/ECS)
+- [x] Event worker queue (RabbitMQ production / in-memory dev fallback)
+- [x] Dead-letter queue (DLQ) for failed event processing
+- [x] Exponential backoff retry on event processing failures
+- [x] Event queue stats endpoint (GET /api/v1/queue/stats)
+- [x] CORS rules (allow_origins configurable)
+- [x] Database connection pooling (50 pool + 50 overflow)
+- [x] Idempotency keys (source_id deduplication on event ingestion)
+
+## Milestone 11 — CI/CD Pipeline — IN PROGRESS
+- [x] GitHub Actions workflow (lint, test, build, deploy)
+- [ ] Terraform infrastructure-as-code
+- [ ] Staging environment configuration
