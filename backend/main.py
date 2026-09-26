@@ -1,34 +1,31 @@
+import hashlib
 import os
+import re
 import shutil
+import sys
 import tempfile
 from datetime import datetime, timedelta
+from typing import List, Optional
 
 import cv2
-import database
-import models
-import schemas
+import requests
 import torch
-import vms_adapters
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-import sys
+from ultralytics import YOLO
 
 # Ensure backend directory is in sys.path
 backend_dir = os.path.dirname(os.path.abspath(__file__))
 if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
 
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Header
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
-from datetime import datetime, timedelta
-import tempfile, shutil, re, hashlib
-from typing import Optional, List
-import cv2
-import torch
-from ultralytics import YOLO
+import database
+import models
+import schemas
+import vms_adapters
 
 # PyTorch 2.6+ compatibility fix for YOLOv8
 _original_torch_load = torch.load
@@ -40,9 +37,6 @@ def _patched_load(*args, **kwargs):
 
 
 torch.load = _patched_load
-
-import requests
-from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -288,7 +282,7 @@ def startup_event():
                 onvif_host="192.168.1.64",
                 onvif_port=80,
                 onvif_username="admin",
-                onvif_password="password123",
+                onvif_password=os.getenv("ONVIF_TEST_PASSWORD", "vault_demo_key"),
             )
             db.add(onvif_cam)
             db.commit()
@@ -652,52 +646,6 @@ def startup_event():
                 db.add(log)
             db.commit()
 
-        # 8. SEED INITIAL SAMPLE VEHICLE DETECTIONS & PLATES
-        # REAL VS MOCK:
-        # vehicle_detections: REAL, populated by our actual YOLOv8 /detect endpoint
-        # plates + OCR: MOCKED for this submission (Plate/OCR pipeline uses Indian ANPR OCR Corpus dataset in production; mocked here with realistic sample data due to hackathon time constraints)
-        # watchlist, alerts, vehicle_movements: MOCKED seed data demonstrating the pipeline logic
-        if db.query(models.VehicleDetection).count() == 0:
-            print("Seeding initial sample vehicle_detections and plates...")
-            det1 = models.VehicleDetection(
-                camera_id=1,
-                timestamp=now - timedelta(minutes=15),
-                vehicle_type="car",
-                confidence_score=0.92,
-                bounding_box=[0.22, 0.55, 0.51, 0.76],
-                frame_snapshot_path="/snapshots/det_ahm_01.jpg",
-            )
-            db.add(det1)
-            db.flush()
-
-            # Plate/OCR pipeline uses Indian ANPR OCR Corpus dataset in production; mocked here with realistic sample data due to hackathon time constraints
-            plate1 = models.Plate(
-                detection_id=det1.id,
-                plate_text="GJ01-AB-1234",
-                ocr_confidence=0.94,
-                plate_bounding_box=[0.35, 0.65, 0.45, 0.72],
-            )
-            db.add(plate1)
-
-            det2 = models.VehicleDetection(
-                camera_id=11,
-                timestamp=now - timedelta(minutes=25),
-                vehicle_type="bus",
-                confidence_score=0.89,
-                bounding_box=[0.15, 0.30, 0.60, 0.85],
-                frame_snapshot_path="/snapshots/det_srt_02.jpg",
-            )
-            db.add(det2)
-            db.flush()
-
-            # Plate/OCR pipeline uses Indian ANPR OCR Corpus dataset in production; mocked here with realistic sample data due to hackathon time constraints
-            plate2 = models.Plate(
-                detection_id=det2.id,
-                plate_text="GJ05-XX-9999",
-                ocr_confidence=0.91,
-                plate_bounding_box=[0.28, 0.68, 0.40, 0.76],
-            )
-            db.add(plate2)
         # 9. SEED STREAM HEALTH (Live RTSP Telemetry)
         if db.query(models.StreamHealth).count() == 0:
             print("Seeding stream_health table...")

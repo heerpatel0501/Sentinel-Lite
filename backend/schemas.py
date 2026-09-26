@@ -17,10 +17,13 @@ class CameraBase(BaseModel):
     status: str
     resolution: str
 
-    # ONVIF Credentials
+    # Safe ONVIF Connection Parameters (credentials excluded from API responses)
     onvif_host: Optional[str] = None
     onvif_port: Optional[int] = None
     onvif_username: Optional[str] = None
+
+
+class CameraCreate(CameraBase):
     onvif_password: Optional[str] = None
 
 

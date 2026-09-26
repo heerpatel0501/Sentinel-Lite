@@ -39,3 +39,8 @@ final_hackathon_demo.webm
 Thumbs.db
 .vscode/
 .idea/
+
+# Runtime test evidence snapshots
+backend/evidence/snapshots/evidence_cam*_*_*.jpg
+!backend/evidence/snapshots/*seed*
+

@@ -110,7 +110,8 @@ class ONVIFProvider(VMSProvider):
     DEVICE_REGISTRY: Dict[str, Dict[str, Any]] = {
         # "cam-onvif-01": {"host": "192.168.1.64", "port": 80, "user": "admin", "password": "abc"},
     }
-    RELAY_BASE_URL = os.getenv("RELAY_BASE_URL", "http://localhost:8888")
+    RELAY_INTERNAL_URL = os.getenv("RELAY_INTERNAL_URL", os.getenv("RELAY_BASE_URL", "http://localhost:8888"))
+    RELAY_PUBLIC_URL = os.getenv("RELAY_PUBLIC_URL", os.getenv("RELAY_BASE_URL", "http://localhost:8888"))
 
     def _get_device_info(self, camera: Any) -> Optional[Dict[str, Any]]:
         camera_id = str(getattr(camera, "id", camera))
@@ -175,7 +176,7 @@ class ONVIFProvider(VMSProvider):
             }
 
         return {
-            "stream_url": f"{self.RELAY_BASE_URL}/{camera_id}/index.m3u8",
+            "stream_url": f"{self.RELAY_PUBLIC_URL}/{camera_id}/index.m3u8",
             "status": await self.check_status(camera),
             "resolution": "unknown"
         }
@@ -218,7 +219,8 @@ class SentinelOfficialRTSPAdapter(VMSProvider):
     def __init__(self, base_ingest_url: str = "https://cctv.corp8.cloud"):
         self.base_ingest_url = base_ingest_url
 
-    def get_stream(self, camera_id: Any) -> Dict[str, Any]:
+    async def get_stream(self, camera: Any) -> Dict[str, Any]:
+        camera_id = getattr(camera, "id", camera)
         return {
             "stream_url": f"{self.base_ingest_url}/{camera_id}/index.m3u8",
             "rtsp_transport": "tcp",
@@ -228,6 +230,22 @@ class SentinelOfficialRTSPAdapter(VMSProvider):
             "sync_mode": "PTS",
             "reconnect_policy": "exponential_backoff"
         }
+
+
+async def probe_mediamtx_relay(target_url: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Probes MediaMTX relay endpoint connectivity (for testing internal Docker or localhost paths).
+    """
+    import httpx
+    url = target_url or ONVIFProvider.RELAY_INTERNAL_URL
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get(url)
+            return {"url": url, "reachable": True, "status_code": resp.status_code}
+    except Exception as exc:
+        return {"url": url, "reachable": False, "error": str(exc)}
+
+
 def get_vms_provider(vendor_name: str) -> VMSProvider:
     """Factory function to get the correct VMS provider."""
     vendors = {

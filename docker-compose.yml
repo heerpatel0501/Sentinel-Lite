@@ -23,6 +23,8 @@ services:
       - db
     environment:
       DATABASE_URL: postgresql://sentinel:sentinel_password@db:5432/sentinel_db
+      RELAY_INTERNAL_URL: http://mediamtx:8888
+      RELAY_PUBLIC_URL: http://localhost:8888
     restart: always
 
   frontend:
