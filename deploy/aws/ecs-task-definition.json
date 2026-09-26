@@ -6,12 +6,12 @@
   ],
   "cpu": "2048",
   "memory": "4096",
-  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
-  "taskRoleArn": "arn:aws:iam::123456789012:role/sentinelTaskRole",
+  "executionRoleArn": "arn:aws:iam::<YOUR_AWS_ACCOUNT_ID>:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::<YOUR_AWS_ACCOUNT_ID>:role/sentinelTaskRole",
   "containerDefinitions": [
     {
       "name": "sentinel-api",
-      "image": "123456789012.dkr.ecr.ap-south-1.amazonaws.com/sentinel-lite-backend:latest",
+      "image": "<YOUR_AWS_ACCOUNT_ID>.dkr.ecr.ap-south-1.amazonaws.com/sentinel-lite-backend:latest",
       "essential": true,
       "portMappings": [
         {
@@ -37,15 +37,15 @@
       "secrets": [
         {
           "name": "DATABASE_URL",
-          "valueFrom": "arn:aws:secretsmanager:ap-south-1:123456789012:secret:sentinel/db_url"
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:<YOUR_AWS_ACCOUNT_ID>:secret:sentinel/db_url"
         },
         {
           "name": "REDIS_URL",
-          "valueFrom": "arn:aws:secretsmanager:ap-south-1:123456789012:secret:sentinel/redis_url"
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:<YOUR_AWS_ACCOUNT_ID>:secret:sentinel/redis_url"
         },
         {
           "name": "JWT_SECRET",
-          "valueFrom": "arn:aws:secretsmanager:ap-south-1:123456789012:secret:sentinel/jwt_secret"
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:<YOUR_AWS_ACCOUNT_ID>:secret:sentinel/jwt_secret"
         }
       ],
       "healthCheck": {

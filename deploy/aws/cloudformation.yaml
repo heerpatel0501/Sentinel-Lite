@@ -169,7 +169,7 @@ Resources:
       MasterUsername: !Ref DBMasterUsername
       MasterUserPassword: !Ref DBMasterPassword
       DBSubnetGroupName: !Ref DBSubnetGroup
-      VPCSecurityGroups:
+      VPCSecurityGroupIds:
         - !Ref DBSecurityGroup
       MultiAZ: true
       StorageEncrypted: true
@@ -230,6 +230,19 @@ Resources:
       HealthyThresholdCount: 2
       UnhealthyThresholdCount: 3
 
+  ALBWebRTCTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${EnvironmentName}-webrtc-tg'
+      Port: 8888
+      Protocol: HTTP
+      VpcId: !Ref VPC
+      TargetType: ip
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+
   ALBListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
@@ -239,6 +252,42 @@ Resources:
       DefaultActions:
         - Type: forward
           TargetGroupArn: !Ref ALBTargetGroup
+
+  ALBWebRTCListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 8888
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBWebRTCTargetGroup
+
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - ALBListener
+      - ALBWebRTCListener
+    Properties:
+      Cluster: !Ref ECSCluster
+      ServiceName: !Sub '${EnvironmentName}-sentinel-service'
+      LaunchType: FARGATE
+      DesiredCount: 1
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !Ref PublicSubnet1
+            - !Ref PublicSubnet2
+          SecurityGroups:
+            - !Ref FargateSecurityGroup
+      LoadBalancers:
+        - TargetGroupArn: !Ref ALBTargetGroup
+          ContainerName: sentinel-api
+          ContainerPort: 8000
+        - TargetGroupArn: !Ref ALBWebRTCTargetGroup
+          ContainerName: sentinel-mediamtx-sidecar
+          ContainerPort: 8888
 
 Outputs:
   ALBEndpoint:
