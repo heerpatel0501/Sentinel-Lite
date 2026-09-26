@@ -610,8 +610,9 @@ def startup_event():
                 ("monitor@gsrtc.in", 3, "viewer"),
                 ("civic@ahmedabadcity.gov.in", 4, "analyst"),
             ]
+            default_hash = "$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW"
             for email, dept_id, role in users_data:
-                u = models.User(email=email, department_id=dept_id, role=role)
+                u = models.User(email=email, password_hash=default_hash, department_id=dept_id, role=role)
                 db.add(u)
             db.commit()
 

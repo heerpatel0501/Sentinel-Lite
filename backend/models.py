@@ -9,7 +9,7 @@ class Camera(Base):
     __tablename__ = "cameras"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(255), nullable=False)
+    name = Column(String(255), unique=True, index=True, nullable=False)
     latitude = Column(Float, nullable=False)
     longitude = Column(Float, nullable=False)
     department = Column(String(50), nullable=False)
@@ -149,6 +149,7 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     email = Column(String(255), unique=True, index=True, nullable=False)
+    password_hash = Column(String(255), nullable=True)  # Populated with bcrypt hash for OAuth2 / JWT login
     department_id = Column(Integer, ForeignKey("departments.id"), nullable=False)
     role = Column(String(50), nullable=False)  # admin/viewer/analyst
 

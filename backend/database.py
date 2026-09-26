@@ -56,11 +56,19 @@ def ensure_schema_compatibility(target_engine):
                     conn.execute(text("ALTER TABLE plates ADD COLUMN normalized_plate VARCHAR(30)"))
                     conn.commit()
 
-        if "vehicle_movements" in existing_tables:
-            existing_cols = {col["name"] for col in inspector.get_columns("vehicle_movements")}
-            if "detection_id" not in existing_cols:
+        if "cameras" in existing_tables:
+            with target_engine.connect() as conn:
+                try:
+                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_cameras_name ON cameras(name)"))
+                    conn.commit()
+                except Exception:
+                    pass
+
+        if "users" in existing_tables:
+            existing_cols = {col["name"] for col in inspector.get_columns("users")}
+            if "password_hash" not in existing_cols:
                 with target_engine.connect() as conn:
-                    conn.execute(text("ALTER TABLE vehicle_movements ADD COLUMN detection_id INTEGER"))
+                    conn.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)"))
                     conn.commit()
 
     except Exception as err:

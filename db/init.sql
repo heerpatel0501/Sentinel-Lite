@@ -5,7 +5,7 @@ CREATE EXTENSION IF NOT EXISTS postgis;
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS cameras (
     id SERIAL PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
+    name VARCHAR(255) UNIQUE NOT NULL,
     latitude DOUBLE PRECISION NOT NULL,
     longitude DOUBLE PRECISION NOT NULL,
     department VARCHAR(50) NOT NULL,
@@ -47,7 +47,7 @@ INSERT INTO cameras (name, latitude, longitude, department, vms_vendor, status, 
 ('GND-Sector-04', 23.2250, 72.6450, 'Municipal', 'Hikvision', 'offline', '1080p', NULL, NULL, NULL, NULL),
 -- Mock ONVIF Camera
 ('TEST-ONVIF-01', 23.0000, 72.0000, 'Police', 'ONVIF', 'online', '1080p', '192.168.1.64', 80, 'admin', 'vault_demo_key')
-ON CONFLICT DO NOTHING;
+ON CONFLICT (name) DO NOTHING;
 
 -- =============================================================================
 -- 2. DEPARTMENTS (Gujarat Administrative Bodies)
@@ -220,16 +220,17 @@ ON CONFLICT DO NOTHING;
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
     department_id INTEGER REFERENCES departments(id),
     role VARCHAR(50) NOT NULL
 );
 
-INSERT INTO users (email, department_id, role) VALUES
-('admin@gujaratpolice.gov.in', 1, 'admin'),
-('analyst@rto.gujarat.gov.in', 2, 'analyst'),
-('monitor@gsrtc.in', 3, 'viewer'),
-('civic@ahmedabadcity.gov.in', 4, 'analyst')
-ON CONFLICT DO NOTHING;
+INSERT INTO users (email, password_hash, department_id, role) VALUES
+('admin@gujaratpolice.gov.in', '$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW', 1, 'admin'),
+('analyst@rto.gujarat.gov.in', '$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW', 2, 'analyst'),
+('monitor@gsrtc.in', '$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW', 3, 'viewer'),
+('civic@ahmedabadcity.gov.in', '$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW', 4, 'analyst')
+ON CONFLICT (email) DO NOTHING;
 
 -- =============================================================================
 -- 9. AUDIT_LOGS (DPDP Act Compliance Access Logging)
