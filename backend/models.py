@@ -38,9 +38,22 @@ class Department(Base):
     name = Column(String(100), unique=True, nullable=False)
     contact_email = Column(String(255), nullable=False)
 
+# Stream Health & Telemetry Tracking
+class StreamHealth(Base):
+    __tablename__ = "stream_health"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    camera_id = Column(Integer, ForeignKey("cameras.id"), nullable=False)
+    status = Column(String(50), default="active", nullable=False)  # active / reconnecting / offline
+    codec = Column(String(20), default="H.264", nullable=False)  # H.264 / H.265
+    resolution = Column(String(20), default="1080p", nullable=False)
+    last_pts = Column(Float, default=0.0)  # Stream container PTS timestamp
+    reconnect_attempts = Column(Integer, default=0)
+    fps_actual = Column(Float, default=0.0)
+    last_heartbeat = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 # 2. vehicle_detections: id, camera_id (FK -> cameras), timestamp, vehicle_type, confidence_score, bounding_box, frame_snapshot_path
-# [REAL PIPELINE DATA]: Dynamically populated by the live YOLOv8 /detect inference endpoint
+# [REAL PIPELINE DATA]: Populated by YOLOv8 vehicle detection engine
 class VehicleDetection(Base):
     __tablename__ = "vehicle_detections"
 
@@ -56,16 +69,15 @@ class VehicleDetection(Base):
     )  # [x1, y1, x2, y2] normalized coordinates
     frame_snapshot_path = Column(String(500), nullable=True)
 
-
-# 3. plates: id, detection_id (FK -> vehicle_detections), plate_text, ocr_confidence, plate_bounding_box
-# [MOCKED DATA]: Plate/OCR pipeline uses Indian ANPR OCR Corpus dataset in production;
-# mocked here with realistic sample data due to hackathon time constraints.
+# 3. plates: id, detection_id (FK -> vehicle_detections), plate_text, normalized_plate, ocr_confidence, plate_bounding_box
+# [REAL OCR PIPELINE]: Produced by license plate detector + EasyOCR engine
 class Plate(Base):
     __tablename__ = "plates"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     detection_id = Column(Integer, ForeignKey("vehicle_detections.id"), nullable=True)
     plate_text = Column(String(50), index=True, nullable=False)
+    normalized_plate = Column(String(50), index=True, nullable=True)  # Standardized e.g. GJ01-AB-1234
     ocr_confidence = Column(Float, nullable=False)
     plate_bounding_box = Column(JSON, nullable=True)
 
@@ -82,9 +94,8 @@ class Watchlist(Base):
     added_date = Column(DateTime(timezone=True), server_default=func.now())
     active = Column(Boolean, default=True, nullable=False)
 
-
-# 5. vehicle_movements: id, plate_text, camera_id (FK), department_id (FK), timestamp
-# [MOCKED SEED DATA]: Powers cross-department correlation — same plate observed across 2+ different department cameras.
+# 5. vehicle_movements: id, plate_text, camera_id (FK), department_id (FK), detection_id (FK), timestamp
+# Powers cross-department correlation with full evidence traceability to vehicle_detections
 class VehicleMovement(Base):
     __tablename__ = "vehicle_movements"
 
@@ -92,13 +103,11 @@ class VehicleMovement(Base):
     plate_text = Column(String(50), index=True, nullable=False)
     camera_id = Column(Integer, ForeignKey("cameras.id"), nullable=False)
     department_id = Column(Integer, ForeignKey("departments.id"), nullable=False)
-    timestamp = Column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-
+    detection_id = Column(Integer, ForeignKey("vehicle_detections.id"), nullable=True)  # Full evidence traceability
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 # 6. alerts: id, plate_text, alert_type, camera_ids_involved, departments_involved, timestamp, status
-# [MOCKED SEED DATA]: Stores migrated inter-agency alerts (cross_department, watchlist_match, speeding).
+# Stores inter-agency alerts (cross_department, watchlist_match, speeding).
 class Alert(Base):
     __tablename__ = "alerts"
 
@@ -120,6 +129,20 @@ class Alert(Base):
     )  # Context summary for dashboard display
 
 
+# Evidence Snapshots Table (Metadata and file reference pointers; zero raw video in DB)
+class EvidenceRecord(Base):
+    __tablename__ = "evidence_records"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    detection_id = Column(Integer, ForeignKey("vehicle_detections.id"), nullable=True)
+    plate_text = Column(String(50), index=True, nullable=False)
+    file_path = Column(String(500), nullable=False)
+    uri_reference = Column(String(500), nullable=False)
+    captured_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    pts_timestamp = Column(Float, default=0.0)
+    file_size_bytes = Column(Integer, default=0)
+    sha256_hash = Column(String(64), nullable=True)
+
 # 7. users: id, email, department_id (FK), role (admin/viewer/analyst)
 class User(Base):
     __tablename__ = "users"
@@ -129,17 +152,16 @@ class User(Base):
     department_id = Column(Integer, ForeignKey("departments.id"), nullable=False)
     role = Column(String(50), nullable=False)  # admin/viewer/analyst
 
-
-# 8. audit_logs: id, user_id (FK), action, target_type, target_id, timestamp
-# (for DPDP Act compliance — who viewed/accessed what, when)
+# 8. audit_logs: id, user_id (FK), action, target_type, target_id, details, timestamp
+# Supports Access Accountability & Privacy Governance (tracking investigator queries & sensitive dossier access)
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    action = Column(String(100), nullable=False)
-    target_type = Column(String(50), nullable=False)
+    action = Column(String(100), nullable=False)  # SEARCH_PLATE / VIEW_PROFILE / EXPORT_JOURNEY
+    target_type = Column(String(50), nullable=False)  # plate / vehicle / alert
     target_id = Column(String(100), nullable=False)
-    timestamp = Column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
+    details = Column(JSON, nullable=True)  # Query parameters, client role, result count
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+

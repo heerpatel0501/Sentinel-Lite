@@ -3,6 +3,7 @@ import MapComponent from './components/MapComponent';
 import StatsBar from './components/StatsBar';
 import AlertsSidebar from './components/AlertsSidebar';
 import VideoModal from './components/VideoModal';
+import InvestigatorModal from './components/InvestigatorModal';
 
 // Backend URL - assuming running on localhost
 const API_BASE = 'http://localhost:8000';
@@ -15,6 +16,15 @@ function App() {
   const [selectedCamera, setSelectedCamera] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [streamInfo, setStreamInfo] = useState(null);
+
+  // Investigator Dossier Modal State
+  const [investigatorPlate, setInvestigatorPlate] = useState(null);
+  const [isInvestigatorOpen, setIsInvestigatorOpen] = useState(false);
+
+  const openInvestigator = (plate = 'GJ01-AB-1234') => {
+    setInvestigatorPlate(plate);
+    setIsInvestigatorOpen(true);
+  };
 
   useEffect(() => {
     // Fetch initial data
@@ -54,7 +64,7 @@ function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: '#f0f2f5' }}>
-      <StatsBar health={health} />
+      <StatsBar health={health} onOpenSearch={openInvestigator} />
       
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         <div style={{ flex: 1, position: 'relative' }}>
@@ -96,11 +106,21 @@ function App() {
           )}
         </div>
         
-        <AlertsSidebar alerts={alerts} />
+        <AlertsSidebar 
+          alerts={alerts} 
+          onSelectPlate={openInvestigator} 
+        />
       </div>
 
       {isModalOpen && streamInfo && (
         <VideoModal streamInfo={streamInfo} onClose={closeFeed} cameraName={selectedCamera?.name} />
+      )}
+
+      {isInvestigatorOpen && (
+        <InvestigatorModal 
+          initialPlate={investigatorPlate} 
+          onClose={() => setIsInvestigatorOpen(false)} 
+        />
       )}
     </div>
   );

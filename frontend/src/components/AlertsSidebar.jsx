@@ -1,17 +1,27 @@
 import React from 'react';
 
-function AlertsSidebar({ alerts }) {
+function AlertsSidebar({ alerts, onSelectPlate }) {
   return (
     <div style={styles.sidebar}>
-      <h3 style={styles.header}>🚨 Cross-Dept Alerts</h3>
+      <div style={styles.header}>
+        <h3 style={{ margin: 0 }}>🚨 Cross-Dept Alerts</h3>
+        <small style={{ color: '#64748b' }}>Live Intelligence Stream</small>
+      </div>
       <div style={styles.list}>
         {alerts.length === 0 ? (
-          <p>No active alerts</p>
+          <p style={{ color: '#64748b', fontSize: '14px' }}>No active alerts</p>
         ) : (
           alerts.map(alert => (
-            <div key={alert.id} style={styles.card}>
+            <div 
+              key={alert.id} 
+              style={styles.card}
+              onClick={() => onSelectPlate && onSelectPlate(alert.plate_number)}
+            >
               <div style={styles.timestamp}>{alert.timestamp}</div>
-              <div style={styles.title}>Plate: {alert.plate_number}</div>
+              <div style={styles.titleRow}>
+                <span style={styles.plate}>{alert.plate_number}</span>
+                <span style={styles.investigateTag}>🔍 Investigate</span>
+              </div>
               <p style={styles.desc}>{alert.description}</p>
               <div style={styles.depts}>
                 {alert.departments.map(d => (
@@ -51,21 +61,39 @@ const styles = {
     borderLeft: '4px solid #ef4444',
     padding: '15px',
     marginBottom: '15px',
-    borderRadius: '4px',
-    boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
+    borderRadius: '6px',
+    boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+    cursor: 'pointer',
+    transition: 'transform 0.15s ease, box-shadow 0.15s ease'
   },
   timestamp: {
     fontSize: '12px',
     color: '#64748b',
     marginBottom: '5px'
   },
-  title: {
-    fontWeight: 'bold',
+  titleRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: '8px'
+  },
+  plate: {
+    fontWeight: 'bold',
+    fontFamily: 'monospace',
+    fontSize: '15px',
+    color: '#0f172a'
+  },
+  investigateTag: {
+    fontSize: '11px',
+    color: '#2563eb',
+    fontWeight: '600',
+    backgroundColor: '#eff6ff',
+    padding: '2px 6px',
+    borderRadius: '4px'
   },
   desc: {
     margin: '0 0 10px 0',
-    fontSize: '14px',
+    fontSize: '13px',
     color: '#334155'
   },
   depts: {
