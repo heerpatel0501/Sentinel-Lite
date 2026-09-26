@@ -26,10 +26,10 @@ def check(name, condition, detail=""):
     global PASS, FAIL
     if condition:
         PASS += 1
-        print(f"  ✓ {name}")
+        print(f"  [PASS] {name}")
     else:
         FAIL += 1
-        print(f"  ✗ {name} — {detail}")
+        print(f"  [FAIL] {name} — {detail}")
 
 
 def test_security_headers():
@@ -226,15 +226,15 @@ def test_concurrent_rate_limits():
 
 
 if __name__ == "__main__":
-    print("╔══════════════════════════════════════════════════════════════╗")
-    print("║  Sentinel-Lite Phase 11 Production Hardening Test Suite     ║")
-    print("╚══════════════════════════════════════════════════════════════╝")
+    print("================================================================")
+    print("   Sentinel-Lite Phase 11 Production Hardening Test Suite       ")
+    print("================================================================")
 
     try:
         r = requests.get(f"{BASE}/health", timeout=3)
         assert r.status_code == 200
     except Exception as e:
-        print(f"\n  ✗ Server not reachable at {BASE}: {e}")
+        print(f"\n  [FAIL] Server not reachable at {BASE}: {e}")
         exit(1)
 
     test_security_headers()
@@ -251,9 +251,9 @@ if __name__ == "__main__":
     print(f"  Results: {PASS}/{total} passed, {FAIL} failed")
 
     if FAIL == 0:
-        print("  ✓ ALL PHASE 11 TESTS PASSED")
+        print("  [PASS] ALL PHASE 11 TESTS PASSED")
     else:
-        print(f"  ✗ {FAIL} TESTS FAILED")
+        print(f"  [FAIL] {FAIL} TESTS FAILED")
 
     print(f"{'='*60}")
     exit(0 if FAIL == 0 else 1)
