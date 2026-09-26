@@ -1,10 +1,12 @@
-from pydantic import BaseModel, computed_field, field_serializer
-from typing import Union, List, Optional
 from datetime import datetime
+from typing import List, Optional, Union
+
+from pydantic import BaseModel, computed_field, field_serializer
 
 # ==============================================================================
 # Camera Schemas
 # ==============================================================================
+
 
 class CameraBase(BaseModel):
     name: str
@@ -15,6 +17,13 @@ class CameraBase(BaseModel):
     status: str
     resolution: str
 
+    # ONVIF Credentials
+    onvif_host: Optional[str] = None
+    onvif_port: Optional[int] = None
+    onvif_username: Optional[str] = None
+    onvif_password: Optional[str] = None
+
+
 class Camera(CameraBase):
     id: Union[int, str]
     added_date: datetime
@@ -22,20 +31,24 @@ class Camera(CameraBase):
     class Config:
         from_attributes = True
 
+
 # ==============================================================================
 # Pipeline Schemas: CCTV -> Vehicle -> Plate -> OCR -> Watchlist -> Alert
 # ==============================================================================
+
 
 # 1. departments
 class DepartmentBase(BaseModel):
     name: str
     contact_email: str
 
+
 class Department(DepartmentBase):
     id: int
 
     class Config:
         from_attributes = True
+
 
 # 2. vehicle_detections (REAL: populated by YOLOv8 /detect)
 class VehicleDetectionBase(BaseModel):
@@ -45,12 +58,14 @@ class VehicleDetectionBase(BaseModel):
     bounding_box: List[float]
     frame_snapshot_path: Optional[str] = None
 
+
 class VehicleDetection(VehicleDetectionBase):
     id: int
     timestamp: datetime
 
     class Config:
         from_attributes = True
+
 
 # 3. plates (MOCKED for submission)
 class PlateBase(BaseModel):
@@ -59,11 +74,13 @@ class PlateBase(BaseModel):
     ocr_confidence: float
     plate_bounding_box: Optional[List[float]] = None
 
+
 class Plate(PlateBase):
     id: int
 
     class Config:
         from_attributes = True
+
 
 # 4. watchlist (MOCKED seed data)
 class WatchlistBase(BaseModel):
@@ -72,6 +89,7 @@ class WatchlistBase(BaseModel):
     added_by_department: str
     active: bool = True
 
+
 class Watchlist(WatchlistBase):
     id: int
     added_date: datetime
@@ -79,11 +97,13 @@ class Watchlist(WatchlistBase):
     class Config:
         from_attributes = True
 
+
 # 5. vehicle_movements (MOCKED seed data - powers cross-dept correlation)
 class VehicleMovementBase(BaseModel):
     plate_text: str
     camera_id: int
     department_id: int
+
 
 class VehicleMovement(VehicleMovementBase):
     id: int
@@ -91,6 +111,7 @@ class VehicleMovement(VehicleMovementBase):
 
     class Config:
         from_attributes = True
+
 
 # 6. alerts (MOCKED seed data)
 class AlertBase(BaseModel):
@@ -100,6 +121,7 @@ class AlertBase(BaseModel):
     departments_involved: List[str]
     status: str = "new"
     description: Optional[str] = None
+
 
 class Alert(AlertBase):
     id: Union[int, str]
@@ -130,17 +152,20 @@ class Alert(AlertBase):
     class Config:
         from_attributes = True
 
+
 # 7. users
 class UserBase(BaseModel):
     email: str
     department_id: int
     role: str
 
+
 class User(UserBase):
     id: int
 
     class Config:
         from_attributes = True
+
 
 # 8. audit_logs (DPDP Act compliance)
 class AuditLogBase(BaseModel):
@@ -149,6 +174,7 @@ class AuditLogBase(BaseModel):
     target_type: str
     target_id: str
 
+
 class AuditLog(AuditLogBase):
     id: int
     timestamp: datetime
@@ -156,14 +182,17 @@ class AuditLog(AuditLogBase):
     class Config:
         from_attributes = True
 
+
 # ==============================================================================
 # System Telemetry & VMS Schemas
 # ==============================================================================
+
 
 class HealthStats(BaseModel):
     total_cameras: int
     online_percentage: float
     departments_connected: int
+
 
 class VMSStreamResponse(BaseModel):
     stream_url: str

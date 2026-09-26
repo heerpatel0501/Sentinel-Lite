@@ -8,3 +8,5 @@ python-multipart==0.0.6
 opencv-python-headless==4.8.1.78
 requests==2.31.0
 python-dotenv==1.0.0
+onvif-zeep==0.2.12
+psycopg2-binary>=2.9.0

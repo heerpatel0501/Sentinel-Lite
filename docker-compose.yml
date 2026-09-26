@@ -34,5 +34,14 @@ services:
       - backend
     restart: always
 
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: sentinel_mediamtx
+    ports:
+      - "8554:8554"
+      - "8888:8888"
+      - "8889:8889"
+    restart: always
+
 volumes:
   postgres_data:
