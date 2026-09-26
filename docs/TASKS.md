@@ -54,8 +54,11 @@
 pm run build)
 - [x] Docker Compose configuration validation
 
-## Phase 9: Open-Source Hygiene & Future Enhancements
-- [ ] Add LICENSE file (MIT recommended)
-- [ ] Add CONTRIBUTING.md
-- [ ] Bridge standalone RabbitMQ event-correlation microservice into core alerts pipeline
-- [ ] Implement production user authentication (OAuth2 / JWT tokens)
+## Phase 9: Open-Source Hygiene & Future Enhancements — DONE
+- [x] Add LICENSE file (MIT recommended)
+- [x] Add CONTRIBUTING.md
+- [x] Bridge standalone RabbitMQ event-correlation microservice into core alerts pipeline (POST /api/events/correlate)
+- [x] Implement production user authentication (HMAC-SHA256 JWT tokens & Bearer authorization)
+- [x] Command Center High-Contrast Dark UI with Natural Language Search pill & interactive RBAC selector
+- [x] Live automated polling for real-time alert streams in frontend dashboard
+

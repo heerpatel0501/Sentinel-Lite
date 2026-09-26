@@ -249,3 +249,78 @@ INSERT INTO audit_logs (user_id, action, target_type, target_id, timestamp) VALU
 (2, 'WATCHLIST_QUERY', 'watchlist', 'GJ01AB1234', CURRENT_TIMESTAMP - INTERVAL '1 hour'),
 (1, 'EXPORT_CROSS_DEPT_TRAIL', 'vehicle_movement', 'GJ05-XX-9999', CURRENT_TIMESTAMP - INTERVAL '30 minutes')
 ON CONFLICT DO NOTHING;
+
+-- =============================================================================
+-- 10. VMS_SYSTEMS (VMS Federation - Phase 1 & 2)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS vms_systems (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) UNIQUE NOT NULL,
+    vendor VARCHAR(50) NOT NULL,
+    host VARCHAR(255),
+    port INTEGER DEFAULT 80,
+    protocol VARCHAR(20) DEFAULT 'RTSP',
+    department_id INTEGER REFERENCES departments(id),
+    status VARCHAR(20) DEFAULT 'active',
+    sync_interval_seconds INTEGER DEFAULT 300,
+    last_sync TIMESTAMP
+);
+
+INSERT INTO vms_systems (name, vendor, host, port, protocol, department_id, status, last_sync) VALUES
+('Police-Milestone-XProtect', 'Milestone', '10.0.1.10', 80, 'RTSP', 1, 'active', CURRENT_TIMESTAMP),
+('RTO-Hikvision-iVMS', 'Hikvision', '10.0.2.10', 8000, 'RTSP', 2, 'active', CURRENT_TIMESTAMP),
+('GSRTC-Genetec-Center', 'Genetec', '10.0.3.10', 443, 'RTSP', 3, 'active', CURRENT_TIMESTAMP),
+('Municipal-Dahua-DSS', 'Dahua', '10.0.4.10', 37777, 'RTSP', 4, 'active', CURRENT_TIMESTAMP),
+('SmartCity-ONVIF-Gateway', 'ONVIF', '192.168.1.64', 80, 'ONVIF', 4, 'active', CURRENT_TIMESTAMP),
+('Sentinel-Official-RTSP-Grid', 'Sentinel', 'cctv.corp8.cloud', 554, 'RTSP', 1, 'active', CURRENT_TIMESTAMP)
+ON CONFLICT DO NOTHING;
+
+-- =============================================================================
+-- 11. EVENTS (Canonical Event Model - Phase 4)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS events (
+    id SERIAL PRIMARY KEY,
+    source_id VARCHAR(100) UNIQUE NOT NULL,
+    camera_id INTEGER REFERENCES cameras(id),
+    event_type VARCHAR(50) NOT NULL,
+    occurred_at TIMESTAMP NOT NULL,
+    received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    confidence DOUBLE PRECISION DEFAULT 1.0,
+    payload JSON
+);
+
+-- =============================================================================
+-- 12. INVESTIGATIONS (Case Dossier Tracking - Phase 8)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS investigations (
+    id SERIAL PRIMARY KEY,
+    title VARCHAR(255) NOT NULL,
+    case_number VARCHAR(100) UNIQUE NOT NULL,
+    target_plate VARCHAR(50),
+    lead_investigator_id INTEGER REFERENCES users(id),
+    status VARCHAR(50) DEFAULT 'active',
+    priority VARCHAR(20) DEFAULT 'high',
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO investigations (title, case_number, target_plate, lead_investigator_id, status, priority, notes) VALUES
+('Investigation: Cross-Agency Interception of Stolen Vehicle GJ01-AB-1234', 'CASE-2026-GUJ-0842', 'GJ01-AB-1234', 1, 'active', 'critical', 'Target vehicle flagged in state stolen vehicle registry. Reconstructed path across Ahmedabad and Gandhinagar.')
+ON CONFLICT DO NOTHING;
+
+-- =============================================================================
+-- 13. INVESTIGATION_EVIDENCE (Forensic Evidence Linking - Phase 8)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS investigation_evidence (
+    id SERIAL PRIMARY KEY,
+    investigation_id INTEGER REFERENCES investigations(id),
+    evidence_record_id INTEGER REFERENCES evidence_records(id),
+    title VARCHAR(255) NOT NULL,
+    evidence_type VARCHAR(50) DEFAULT 'snapshot',
+    uri VARCHAR(500) NOT NULL,
+    sha256_hash VARCHAR(64),
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+

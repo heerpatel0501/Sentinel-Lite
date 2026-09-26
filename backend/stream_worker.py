@@ -99,6 +99,7 @@ class SentinelStreamWorker(threading.Thread):
                 db.flush() # get v_det.id
 
                 # 2. plates
+                plate_to_check = d.get("normalized_plate") or d.get("plate_text") or "UNKNOWN"
                 plate_entry = models.Plate(
                     detection_id=v_det.id,
                     plate_text=d["plate_text"],

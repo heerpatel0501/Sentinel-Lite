@@ -224,7 +224,32 @@ def run_tests():
             assert r_viewer.status_code == 403, f"Expected 403 Forbidden for Viewer, got {r_viewer.status_code}"
             print(f"[*] Viewer Clearance Check: RESTRICTED (HTTP 403 Forbidden as required)")
 
-            # 3. Audit Log Repository
+            # 3. JWT Token Generation & Bearer Authorization Check
+            r_login = client.post("/api/auth/login", json={"email": "analyst@rto.gujarat.gov.in", "password": "any"})
+            assert r_login.status_code == 200, f"Login endpoint failed: {r_login.status_code}"
+            token_data = r_login.json()
+            jwt_token = token_data.get("access_token")
+            assert jwt_token and len(jwt_token.split(".")) == 3, "Invalid JWT format returned"
+            print(f"[*] JWT Authentication Token Issued: {jwt_token[:25]}... (Role: {token_data.get('role')})")
+
+            r_me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {jwt_token}"})
+            assert r_me.status_code == 200, f"/api/auth/me failed with Bearer token: {r_me.status_code}"
+            assert r_me.json().get("role") == "analyst", f"Unexpected role from Bearer token: {r_me.json()}"
+            print(f"[*] JWT Bearer Verification: PASSED (Clearance: {r_me.json().get('clearance_level')})")
+
+            # 4. ADR-006 & Phase 9: Correlated Event Ingestion Bridge Check
+            r_event = client.post("/api/events/correlate", json={
+                "event_type": "loitering",
+                "camera_ids": ["AHM-Junction-01"],
+                "departments": ["Police", "Municipal"],
+                "description": "Suspect loitering detected by perimeter sensor",
+                "plate_text": "SENSOR-LOITER-01"
+            }, headers={"Authorization": f"Bearer {jwt_token}"})
+            assert r_event.status_code == 200, f"Event correlation bridge failed: {r_event.status_code}"
+            assert r_event.json().get("success") is True, "Event correlation response not marked success"
+            print(f"[*] Event Correlation Bridge (ADR-006): PASSED (Alert ID: {r_event.json().get('alert_id')})")
+
+            # 5. Audit Log Repository
             r_audit = client.get("/api/audit-logs", headers={"X-User-Role": "admin"})
             assert r_audit.status_code == 200, f"Audit logs returned {r_audit.status_code}"
             logs = r_audit.json()
@@ -233,6 +258,7 @@ def run_tests():
             print(f"[*] Most Recent Audit Event: Action={logs[0]['action']} | Target={logs[0]['target_id']}")
 
             test_results["TEST 5/8: RBAC & Privacy Audit Governance"] = "PASS"
+
         except Exception as e:
             print(f"[!] TEST 5 FAILED: {e}")
             test_results["TEST 5/8: RBAC & Privacy Audit Governance"] = f"FAIL ({e})"
@@ -347,8 +373,8 @@ def run_tests():
     all_passed = True
     for tname, status in test_results.items():
         pass_flag = "PASS" in status or "BLOCKED" in status
-        icon = "✅" if "PASS" in status else ("⚠️" if "BLOCKED" in status else "❌")
-        print(f"  {icon} {tname:50s} : {status}")
+        icon = "[OK]" if "PASS" in status else ("[WARN]" if "BLOCKED" in status else "[FAIL]")
+        print(f"  {icon:7s} {tname:50s} : {status}")
         if "FAIL" in status:
             all_passed = False
 

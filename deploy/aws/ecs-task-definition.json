@@ -1,0 +1,96 @@
+{
+  "family": "sentinel-lite-production",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "2048",
+  "memory": "4096",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::123456789012:role/sentinelTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "sentinel-api",
+      "image": "123456789012.dkr.ecr.ap-south-1.amazonaws.com/sentinel-lite-backend:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "hostPort": 8000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "ENVIRONMENT",
+          "value": "production"
+        },
+        {
+          "name": "RELAY_INTERNAL_URL",
+          "value": "http://localhost:8888"
+        },
+        {
+          "name": "RELAY_PUBLIC_URL",
+          "value": "https://stream.sentinel.gujaratpolice.gov.in"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:123456789012:secret:sentinel/db_url"
+        },
+        {
+          "name": "REDIS_URL",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:123456789012:secret:sentinel/redis_url"
+        },
+        {
+          "name": "JWT_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:ap-south-1:123456789012:secret:sentinel/jwt_secret"
+        }
+      ],
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""
+        ],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 15
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/sentinel-lite-production",
+          "awslogs-region": "ap-south-1",
+          "awslogs-stream-prefix": "api"
+        }
+      }
+    },
+    {
+      "name": "sentinel-mediamtx-sidecar",
+      "image": "bluenviron/mediamtx:latest",
+      "essential": false,
+      "portMappings": [
+        {
+          "containerPort": 8554,
+          "hostPort": 8554,
+          "protocol": "tcp"
+        },
+        {
+          "containerPort": 8888,
+          "hostPort": 8888,
+          "protocol": "tcp"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/sentinel-lite-production",
+          "awslogs-region": "ap-south-1",
+          "awslogs-stream-prefix": "mediamtx"
+        }
+      }
+    }
+  ]
+}

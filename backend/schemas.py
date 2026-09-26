@@ -218,6 +218,35 @@ class User(UserBase):
         from_attributes = True
 
 
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    role: str
+    user_id: int
+    email: str
+
+
+# Event correlation bridge (ADR-006 & Phase 9)
+class CorrelatedEventCreate(BaseModel):
+    event_type: str  # loitering / tailgating / door_breach / zone_intrusion / cross_sensor
+    camera_ids: List[str]
+    departments: List[str]
+    description: str
+    plate_text: Optional[str] = "SENSOR-EVENT"
+
+
+class CorrelatedEventResponse(BaseModel):
+    success: bool
+    alert_id: int
+    message: str
+
+
+
 # 8. audit_logs (DPDP Act compliance)
 class AuditLogBase(BaseModel):
     user_id: Optional[int] = None
@@ -271,3 +300,100 @@ class InvestigationResult(BaseModel):
     departments_involved: List[str]
     journey_history: List[JourneyPoint]
     active_alerts: List[str]
+
+
+# ==============================================================================
+# Implementation Plan Schemas (docs/docs/IMPLEMENTATION_PLAN.md)
+# ==============================================================================
+
+# VMS System Schemas (Phase 1 & 2)
+class VMSSystemBase(BaseModel):
+    name: str
+    vendor: str
+    host: Optional[str] = None
+    port: int = 80
+    protocol: str = "RTSP"
+    department_id: Optional[int] = None
+    status: str = "active"
+    sync_interval_seconds: int = 300
+
+
+class VMSSystemCreate(VMSSystemBase):
+    pass
+
+
+class VMSSystem(VMSSystemBase):
+    id: int
+    last_sync: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+# Canonical Event Schemas (Phase 4)
+class CanonicalEventBase(BaseModel):
+    source_id: str
+    camera_id: int
+    event_type: str
+    occurred_at: datetime
+    confidence: float = 1.0
+    payload: Optional[dict] = None
+
+
+class CanonicalEventCreate(CanonicalEventBase):
+    pass
+
+
+class CanonicalEvent(CanonicalEventBase):
+    id: int
+    received_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# Investigation & Case Management Schemas (Phase 8)
+class InvestigationEvidenceBase(BaseModel):
+    title: str
+    evidence_type: str = "snapshot"
+    uri: str
+    sha256_hash: Optional[str] = None
+    notes: Optional[str] = None
+    evidence_record_id: Optional[int] = None
+
+
+class InvestigationEvidenceCreate(InvestigationEvidenceBase):
+    pass
+
+
+class InvestigationEvidence(InvestigationEvidenceBase):
+    id: int
+    investigation_id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class InvestigationBase(BaseModel):
+    title: str
+    case_number: str
+    target_plate: Optional[str] = None
+    lead_investigator_id: Optional[int] = None
+    status: str = "active"
+    priority: str = "high"
+    notes: Optional[str] = None
+
+
+class InvestigationCreate(InvestigationBase):
+    pass
+
+
+class Investigation(InvestigationBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+

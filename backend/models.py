@@ -166,3 +166,69 @@ class AuditLog(Base):
     details = Column(JSON, nullable=True)  # Query parameters, client role, result count
     timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
+
+# ==============================================================================
+# Implementation Plan Entities (docs/docs/IMPLEMENTATION_PLAN.md)
+# ==============================================================================
+
+# 9. vms_systems: Registered VMS Federation systems (Phase 1 & 2)
+class VMSSystem(Base):
+    __tablename__ = "vms_systems"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    name = Column(String(100), unique=True, nullable=False)
+    vendor = Column(String(50), nullable=False)  # Milestone, Hikvision, Genetec, Dahua, ONVIF, Sentinel
+    host = Column(String(255), nullable=True)
+    port = Column(Integer, default=80)
+    protocol = Column(String(20), default="RTSP")  # RTSP, HLS, WebRTC, ONVIF
+    department_id = Column(Integer, ForeignKey("departments.id"), nullable=True)
+    status = Column(String(20), default="active")  # active, degraded, unreachable
+    sync_interval_seconds = Column(Integer, default=300)
+    last_sync = Column(DateTime(timezone=True), nullable=True)
+
+
+# 10. events: Canonical Event Model (Phase 4)
+class CanonicalEvent(Base):
+    __tablename__ = "events"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    source_id = Column(String(100), unique=True, index=True, nullable=False)  # Idempotent source event key
+    camera_id = Column(Integer, ForeignKey("cameras.id"), nullable=False)
+    event_type = Column(String(50), nullable=False)  # vehicle_detected, motion, loitering, line_crossed
+    occurred_at = Column(DateTime(timezone=True), nullable=False)
+    received_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    confidence = Column(Float, default=1.0)
+    payload = Column(JSON, nullable=True)
+
+
+# 11. investigations: Case dossier and investigation tracking (Phase 8)
+class Investigation(Base):
+    __tablename__ = "investigations"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    title = Column(String(255), nullable=False)
+    case_number = Column(String(100), unique=True, index=True, nullable=False)
+    target_plate = Column(String(50), nullable=True, index=True)
+    lead_investigator_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    status = Column(String(50), default="active")  # active, closed, pending_review
+    priority = Column(String(20), default="high")  # low, medium, high, critical
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+# 12. investigation_evidence: Attached forensic evidence artifacts (Phase 8)
+class InvestigationEvidence(Base):
+    __tablename__ = "investigation_evidence"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    investigation_id = Column(Integer, ForeignKey("investigations.id"), nullable=False)
+    evidence_record_id = Column(Integer, ForeignKey("evidence_records.id"), nullable=True)
+    title = Column(String(255), nullable=False)
+    evidence_type = Column(String(50), default="snapshot")  # snapshot, video_clip, ocr_log, audit_trail
+    uri = Column(String(500), nullable=False)
+    sha256_hash = Column(String(64), nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+

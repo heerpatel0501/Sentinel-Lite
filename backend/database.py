@@ -17,11 +17,25 @@ try:
         engine = test_engine
         print(f"[DB] Connected successfully to primary PostgreSQL database: {DATABASE_URL.split('@')[-1]}")
     else:
-        engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+        engine = create_engine(
+            DATABASE_URL,
+            connect_args={"check_same_thread": False, "timeout": 30},
+            pool_size=50,
+            max_overflow=50,
+            pool_timeout=30,
+            pool_pre_ping=True,
+        )
 except Exception as e:
     print(f"[DB Warning] Could not connect to PostgreSQL ({e}). Falling back to local SQLite: {FALLBACK_SQLITE_URL}")
     DATABASE_URL = FALLBACK_SQLITE_URL
-    engine = create_engine(FALLBACK_SQLITE_URL, connect_args={"check_same_thread": False})
+    engine = create_engine(
+        FALLBACK_SQLITE_URL,
+        connect_args={"check_same_thread": False, "timeout": 30},
+        pool_size=50,
+        max_overflow=50,
+        pool_timeout=30,
+        pool_pre_ping=True,
+    )
 
 
 def ensure_schema_compatibility(target_engine):

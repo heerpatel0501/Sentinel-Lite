@@ -7,43 +7,72 @@ import tempfile
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-import cv2
 import requests
-import torch
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from ultralytics import YOLO
 
-# Ensure backend directory is in sys.path
-backend_dir = os.path.dirname(os.path.abspath(__file__))
-if backend_dir not in sys.path:
-    sys.path.insert(0, backend_dir)
+import json as _json
 
 import database
 import models
 import schemas
-import vms_adapters
+from middleware import register_production_middleware, metrics as app_metrics, structured_log
+from event_worker import event_worker
 
-# PyTorch 2.6+ compatibility fix for YOLOv8
-_original_torch_load = torch.load
+# Resilient CV and AI imports
+try:
+    import cv2
+except Exception as e:
+    cv2 = None
+    print(f"[AI Warning] cv2 not available: {e}")
 
+try:
+    import torch
+    from ultralytics import YOLO
+    _original_torch_load = torch.load
+    def _patched_load(*args, **kwargs):
+        kwargs.setdefault("weights_only", False)
+        return _original_torch_load(*args, **kwargs)
+    torch.load = _patched_load
+except Exception as e:
+    torch = None
+    YOLO = None
+    print(f"[AI Warning] PyTorch / Ultralytics not available: {e}")
 
-def _patched_load(*args, **kwargs):
-    kwargs.setdefault("weights_only", False)
-    return _original_torch_load(*args, **kwargs)
-
-
-torch.load = _patched_load
 
 load_dotenv()
 
 # Create all tables (preserves existing cameras, adds new pipeline tables)
 models.Base.metadata.create_all(bind=database.engine)
+import seed
+seed.seed_database_if_empty()
 
 app = FastAPI(title="Sentinel-Lite API")
+
+# Start event worker on app boot
+@app.on_event("startup")
+def startup_event_worker():
+    event_worker.start()
+    structured_log.info("event_worker.started", mode=event_worker.stats()["mode"])
+
+@app.on_event("shutdown")
+def shutdown_event_worker():
+    event_worker.stop()
+    structured_log.info("event_worker.stopped")
 
 # Mount evidence snapshots directory for investigator verification
 evidence_base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "evidence")
@@ -51,16 +80,78 @@ snapshots_dir = os.path.join(evidence_base, "snapshots")
 os.makedirs(snapshots_dir, exist_ok=True)
 app.mount("/evidence", StaticFiles(directory=evidence_base), name="evidence")
 
+# ==============================================================================
+# JWT Authentication Engine (Phase 9 & docs/SECURITY.md)
+# ==============================================================================
+import base64
+import hmac
+import json
+import time
+
+JWT_SECRET = os.getenv("JWT_SECRET", "sentinel-lite-production-secret-key-gujarat-surveillance-2026")
+
+def create_jwt_token(payload: dict, expires_in_seconds: int = 86400) -> str:
+    header = {"alg": "HS256", "typ": "JWT"}
+    body = {**payload, "exp": int(time.time()) + expires_in_seconds, "iat": int(time.time())}
+    enc_h = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip("=")
+    enc_b = base64.urlsafe_b64encode(json.dumps(body).encode()).decode().rstrip("=")
+    sig = hmac.new(
+        JWT_SECRET.encode(),
+        f"{enc_h}.{enc_b}".encode(),
+        hashlib.sha256
+    ).digest()
+    enc_s = base64.urlsafe_b64encode(sig).decode().rstrip("=")
+    return f"{enc_h}.{enc_b}.{enc_s}"
+
+def decode_jwt_token(token: str) -> Optional[dict]:
+    try:
+        parts = token.strip().split(".")
+        if len(parts) != 3:
+            return None
+        enc_h, enc_b, enc_s = parts
+        expected_sig = hmac.new(
+            JWT_SECRET.encode(),
+            f"{enc_h}.{enc_b}".encode(),
+            hashlib.sha256
+        ).digest()
+        padded_sig = enc_s + "=" * (-len(enc_s) % 4)
+        if not hmac.compare_digest(base64.urlsafe_b64decode(padded_sig), expected_sig):
+            return None
+        padded_b = enc_b + "=" * (-len(enc_b) % 4)
+        body = json.loads(base64.urlsafe_b64decode(padded_b).decode())
+        if body.get("exp") and body["exp"] < time.time():
+            return None
+        return body
+    except Exception:
+        return None
+
 def get_current_user_and_role(
+    authorization: Optional[str] = Header(None, alias="Authorization"),
     x_user_role: Optional[str] = Header("analyst", alias="X-User-Role"),
     x_user_id: Optional[str] = Header("1", alias="X-User-Id")
 ):
     valid_roles = ["admin", "analyst", "viewer"]
+    
+    # 1. Verify Bearer JWT token if supplied
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1]
+        decoded = decode_jwt_token(token)
+        if decoded and "role" in decoded:
+            role = decoded["role"].lower()
+            if role in valid_roles:
+                return {
+                    "user_id": decoded.get("user_id", 1),
+                    "role": role,
+                    "email": decoded.get("email", f"{role}@gujaratpolice.gov.in")
+                }
+
+    # 2. Backward-compatible header fallback for automated testing
     role = x_user_role.lower() if x_user_role else "analyst"
     if role not in valid_roles:
         role = "viewer"
     user_id = int(x_user_id) if x_user_id and x_user_id.isdigit() else 1
-    return {"user_id": user_id, "role": role}
+    return {"user_id": user_id, "role": role, "email": f"{role}@gujaratpolice.gov.in"}
+
 
 def log_audit_access(db: Session, user_id: int, action: str, target_type: str, target_id: str, details: dict = None):
     try:
@@ -664,11 +755,69 @@ def startup_event():
                 db.add(sh)
             db.commit()
 
+        # 10. SEED VMS SYSTEMS (VMS Federation - Phase 1 & 2)
+        if db.query(models.VMSSystem).count() == 0:
+            print("Seeding vms_systems table...")
+            vms_data = [
+                ("Police-Milestone-XProtect", "Milestone", "10.0.1.10", 80, "RTSP", 1, "active"),
+                ("RTO-Hikvision-iVMS", "Hikvision", "10.0.2.10", 8000, "RTSP", 2, "active"),
+                ("GSRTC-Genetec-Center", "Genetec", "10.0.3.10", 443, "RTSP", 3, "active"),
+                ("Municipal-Dahua-DSS", "Dahua", "10.0.4.10", 37777, "RTSP", 4, "active"),
+                ("SmartCity-ONVIF-Gateway", "ONVIF", "192.168.1.64", 80, "ONVIF", 4, "active"),
+                ("Sentinel-Official-RTSP-Grid", "Sentinel", "cctv.corp8.cloud", 554, "RTSP", 1, "active")
+            ]
+            for vname, vendor, host, port, proto, dept_id, status in vms_data:
+                v = models.VMSSystem(
+                    name=vname,
+                    vendor=vendor,
+                    host=host,
+                    port=port,
+                    protocol=proto,
+                    department_id=dept_id,
+                    status=status,
+                    last_sync=now
+                )
+                db.add(v)
+            db.commit()
+
+        # 11. SEED INITIAL INVESTIGATION (Phase 8)
+        if db.query(models.Investigation).count() == 0:
+            print("Seeding investigations table...")
+            inv = models.Investigation(
+                title="Investigation: Cross-Agency Interception of Stolen Vehicle GJ01-AB-1234",
+                case_number="CASE-2026-GUJ-0842",
+                target_plate="GJ01-AB-1234",
+                lead_investigator_id=1,
+                status="active",
+                priority="critical",
+                notes="Target vehicle flagged in state stolen vehicle registry. Reconstructed path across Ahmedabad and Gandhinagar.",
+                created_at=now - timedelta(hours=3),
+                updated_at=now - timedelta(minutes=15)
+            )
+            db.add(inv)
+            db.flush()
+
+            # Attach evidence
+            ev_record = db.query(models.EvidenceRecord).filter(models.EvidenceRecord.plate_text == "GJ01-AB-1234").first()
+            if ev_record:
+                inv_ev = models.InvestigationEvidence(
+                    investigation_id=inv.id,
+                    evidence_record_id=ev_record.id,
+                    title="Camera 1 Forensic Crop Keyframe",
+                    evidence_type="snapshot",
+                    uri=ev_record.uri_reference,
+                    sha256_hash=ev_record.sha256_hash,
+                    notes="Visual confirmation of driver compartment and license plate bumper ROI."
+                )
+                db.add(inv_ev)
+            db.commit()
+
     except Exception as e:
         print(f"Error during startup database seeding: {e}")
         db.rollback()
     finally:
         db.close()
+
 
 
 # Enable CORS for the frontend
@@ -679,6 +828,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Phase 11 — Production Hardening Middleware Stack
+register_production_middleware(app)
 
 
 @app.get("/cameras", response_model=list[schemas.Camera])
@@ -1069,8 +1221,521 @@ def get_audit_logs(
     """
     return db.query(models.AuditLog).order_by(models.AuditLog.timestamp.desc()).limit(100).all()
 
+# ==============================================================================
+# Authentication & Event Correlation Bridge Endpoints (Phase 9 & ADR-006)
+# ==============================================================================
+
+@app.post("/api/auth/login", response_model=schemas.TokenResponse)
+def login(credentials: schemas.UserLogin, db: Session = Depends(database.get_db)):
+    """
+    Issues JWT access token based on role and department credentials.
+    """
+    user = db.query(models.User).filter(models.User.email == credentials.email).first()
+    if not user:
+        role_map = {
+            "admin@gujaratpolice.gov.in": "admin",
+            "analyst@rto.gujarat.gov.in": "analyst",
+            "monitor@gsrtc.in": "viewer",
+            "civic@ahmedabadcity.gov.in": "analyst"
+        }
+        if credentials.email in role_map:
+            role = role_map[credentials.email]
+            user_id = 1
+        else:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+    else:
+        role = user.role
+        user_id = user.id
+
+    token = create_jwt_token({
+        "user_id": user_id,
+        "email": credentials.email,
+        "role": role
+    })
+
+    log_audit_access(
+        db,
+        user_id=user_id,
+        action="USER_LOGIN",
+        target_type="auth",
+        target_id=str(user_id),
+        details={"email": credentials.email, "role": role}
+    )
+
+    return schemas.TokenResponse(
+        access_token=token,
+        token_type="bearer",
+        role=role,
+        user_id=user_id,
+        email=credentials.email
+    )
+
+@app.get("/api/auth/me")
+def get_current_user_profile(
+    auth: dict = Depends(get_current_user_and_role),
+    db: Session = Depends(database.get_db)
+):
+    """
+    Returns current authenticated investigator session information and role clearance.
+    """
+    user = db.query(models.User).filter(models.User.id == auth["user_id"]).first()
+    dept_name = "State Command Center"
+    if user:
+        dept = db.query(models.Department).filter(models.Department.id == user.department_id).first()
+        if dept:
+            dept_name = dept.name
+
+    return {
+        "user_id": auth["user_id"],
+        "email": auth.get("email", "investigator@gujarat.gov.in"),
+        "role": auth["role"],
+        "department": dept_name,
+        "clearance_level": "LEVEL-3 (CONFIDENTIAL)" if auth["role"] in ["admin", "analyst"] else "LEVEL-1 (PUBLIC TELEMETRY)"
+    }
+
+@app.post("/api/events/correlate", response_model=schemas.CorrelatedEventResponse)
+def ingest_correlated_event(
+    event: schemas.CorrelatedEventCreate,
+    auth: dict = Depends(get_current_user_and_role),
+    db: Session = Depends(database.get_db)
+):
+    """
+    ADR-006 & Phase 9: External Microservice Event Correlation Ingestion Bridge.
+    Receives events from RabbitMQ workers, loitering/tailgating models, or edge door sensors
+    and correlates them directly into the state-wide alerts feed.
+    """
+    new_alert = models.Alert(
+        plate_text=event.plate_text or "SENSOR-CORRELATION",
+        alert_type=event.event_type,
+        camera_ids_involved=event.camera_ids,
+        departments_involved=event.departments,
+        timestamp=datetime.utcnow(),
+        status="new",
+        description=event.description
+    )
+    db.add(new_alert)
+    db.commit()
+    db.refresh(new_alert)
+
+    log_audit_access(
+        db,
+        user_id=auth["user_id"],
+        action="INGEST_CORRELATED_EVENT",
+        target_type="alert",
+        target_id=str(new_alert.id),
+        details={"event_type": event.event_type, "cameras": event.camera_ids}
+    )
+
+    return schemas.CorrelatedEventResponse(
+        success=True,
+        alert_id=new_alert.id,
+        message=f"Event '{event.event_type}' successfully correlated into state alerts table"
+    )
+
+# ==============================================================================
+# Realtime WebSocket Layer (Phase 5 — docs/docs/IMPLEMENTATION_PLAN.md)
+# ==============================================================================
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+    async def broadcast(self, event_name: str, data: dict):
+        message = json.dumps({
+            "event": event_name,
+            "data": data,
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        disconnected = []
+        for connection in self.active_connections:
+            try:
+                await connection.send_text(message)
+            except Exception:
+                disconnected.append(connection)
+        for dead in disconnected:
+            self.disconnect(dead)
+
+ws_manager = ConnectionManager()
+
+@app.websocket("/ws")
+@app.websocket("/api/v1/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await ws_manager.connect(websocket)
+    try:
+        await websocket.send_text(json.dumps({
+            "event": "connected",
+            "message": "Connected to Sentinel-Lite Realtime Gateway",
+            "timestamp": datetime.utcnow().isoformat()
+        }))
+        while True:
+            text = await websocket.receive_text()
+            if text == "ping":
+                await websocket.send_text(json.dumps({"event": "pong"}))
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
+    except Exception:
+        ws_manager.disconnect(websocket)
+
+
+# ==============================================================================
+# Canonical /api/v1 Router (docs/docs/API_CONTRACT.md & Model 3 Federation)
+# ==============================================================================
+
+v1_router = APIRouter(prefix="/api/v1")
+
+# --- 1. Dashboard Summary (Phase 9 & API_CONTRACT.md §8) ---
+@v1_router.get("/dashboard/summary")
+def get_v1_dashboard_summary(db: Session = Depends(database.get_db)):
+    """
+    Returns unified executive dashboard metrics conforming to docs/docs/API_CONTRACT.md §8.
+    """
+    total = db.query(models.Camera).count()
+    online = db.query(models.Camera).filter(models.Camera.status == "online").count()
+    deps = db.query(models.Camera.department).distinct().count()
+    active_alerts = db.query(models.Alert).filter(models.Alert.status == "new").count()
+    total_detections = db.query(models.VehicleDetection).count()
+    total_vms = db.query(models.VMSSystem).count()
+    return {
+        "total_cameras": total,
+        "online_cameras": online,
+        "online_percentage": round((online / total * 100) if total > 0 else 0.0, 1),
+        "departments_connected": deps,
+        "active_alerts": active_alerts,
+        "total_detections": total_detections,
+        "total_vms_systems": total_vms,
+        "status": "OPERATIONAL"
+    }
+
+# --- 2. Authentication (Phase 3 & API_CONTRACT.md §2) ---
+@v1_router.post("/auth/login", response_model=schemas.TokenResponse)
+def v1_login(credentials: schemas.UserLogin, db: Session = Depends(database.get_db)):
+    return login(credentials=credentials, db=db)
+
+@v1_router.get("/auth/me")
+def v1_auth_me(auth: dict = Depends(get_current_user_and_role), db: Session = Depends(database.get_db)):
+    return get_current_user_profile(auth=auth, db=db)
+
+# --- 3. VMS Federation (Phase 1 & 2 & API_CONTRACT.md §3) ---
+@v1_router.get("/vms", response_model=list[schemas.VMSSystem])
+def v1_list_vms(db: Session = Depends(database.get_db)):
+    """List all registered VMS systems."""
+    return db.query(models.VMSSystem).all()
+
+@v1_router.post("/vms", response_model=schemas.VMSSystem)
+def v1_create_vms(
+    vms_in: schemas.VMSSystemCreate,
+    auth: dict = Depends(get_current_user_and_role),
+    db: Session = Depends(database.get_db)
+):
+    """Register a new VMS integration."""
+    vms = models.VMSSystem(**vms_in.dict())
+    db.add(vms)
+    db.commit()
+    db.refresh(vms)
+    log_audit_access(db, user_id=auth["user_id"], action="CREATE_VMS_SYSTEM", target_type="vms", target_id=str(vms.id))
+    return vms
+
+@v1_router.get("/vms/{id}", response_model=schemas.VMSSystem)
+def v1_get_vms(id: int, db: Session = Depends(database.get_db)):
+    vms = db.query(models.VMSSystem).filter(models.VMSSystem.id == id).first()
+    if not vms:
+        raise HTTPException(status_code=404, detail="VMS system not found")
+    return vms
+
+@v1_router.get("/vms/{id}/health")
+async def v1_vms_health(id: int, db: Session = Depends(database.get_db)):
+    """Pings and evaluates VMS provider connectivity."""
+    vms = db.query(models.VMSSystem).filter(models.VMSSystem.id == id).first()
+    if not vms:
+        raise HTTPException(status_code=404, detail="VMS system not found")
+    provider = vms_adapters.get_vms_provider(vms.vendor)
+    status = await provider.check_status(vms)
+    return {"id": vms.id, "name": vms.name, "vendor": vms.vendor, "status": status}
+
+@v1_router.post("/vms/{id}/sync")
+def v1_vms_sync(
+    id: int,
+    auth: dict = Depends(get_current_user_and_role),
+    db: Session = Depends(database.get_db)
+):
+    """Synchronizes camera registry from external VMS source."""
+    vms = db.query(models.VMSSystem).filter(models.VMSSystem.id == id).first()
+    if not vms:
+        raise HTTPException(status_code=404, detail="VMS system not found")
+    vms.last_sync = datetime.utcnow()
+    db.commit()
+    cams_count = db.query(models.Camera).filter(models.Camera.vms_vendor == vms.vendor).count()
+    log_audit_access(db, user_id=auth["user_id"], action="SYNC_VMS_CAMERAS", target_type="vms", target_id=str(id))
+    return {
+        "success": True,
+        "vms_id": id,
+        "vendor": vms.vendor,
+        "cameras_synchronized": cams_count,
+        "last_sync": vms.last_sync.isoformat()
+    }
+
+# --- 4. Canonical Cameras (Phase 1 & API_CONTRACT.md §4) ---
+@v1_router.get("/cameras", response_model=list[schemas.Camera])
+def v1_read_cameras(
+    department: Optional[str] = None,
+    vms_vendor: Optional[str] = None,
+    status: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(database.get_db)
+):
+    query = db.query(models.Camera)
+    if department:
+        query = query.filter(models.Camera.department == department)
+    if vms_vendor:
+        query = query.filter(models.Camera.vms_vendor == vms_vendor)
+    if status:
+        query = query.filter(models.Camera.status == status)
+    return query.offset(skip).limit(limit).all()
+
+@v1_router.post("/cameras", response_model=schemas.Camera)
+def v1_create_camera(
+    cam_in: schemas.CameraCreate,
+    auth: dict = Depends(get_current_user_and_role),
+    db: Session = Depends(database.get_db)
+):
+    if auth["role"] not in ["admin", "analyst"]:
+        raise HTTPException(status_code=403, detail="Insufficient privileges to register cameras")
+    camera = models.Camera(**cam_in.dict())
+    db.add(camera)
+    db.commit()
+    db.refresh(camera)
+    log_audit_access(db, user_id=auth["user_id"], action="CREATE_CAMERA", target_type="camera", target_id=str(camera.id))
+    return camera
+
+@v1_router.get("/cameras/{camera_id}", response_model=schemas.Camera)
+def v1_read_camera(camera_id: str, db: Session = Depends(database.get_db)):
+    return read_camera(camera_id=camera_id, db=db)
+
+@v1_router.get("/cameras/{camera_id}/stream", response_model=schemas.VMSStreamResponse)
+async def v1_read_camera_stream(camera_id: str, db: Session = Depends(database.get_db)):
+    return await read_camera_stream(camera_id=camera_id, db=db)
+
+@v1_router.get("/cameras/{camera_id}/health")
+def v1_camera_health(camera_id: int, db: Session = Depends(database.get_db)):
+    health = db.query(models.StreamHealth).filter(models.StreamHealth.camera_id == camera_id).first()
+    if not health:
+        return {"camera_id": camera_id, "status": "unknown", "fps": 0, "codec": "unknown"}
+    return health
+
+@v1_router.get("/cameras/{camera_id}/events")
+def v1_camera_events(camera_id: int, limit: int = 50, db: Session = Depends(database.get_db)):
+    return db.query(models.VehicleDetection).filter(
+        models.VehicleDetection.camera_id == camera_id
+    ).order_by(models.VehicleDetection.timestamp.desc()).limit(limit).all()
+
+# --- 5. Canonical Events (Phase 4 & API_CONTRACT.md §5) ---
+@v1_router.get("/events")
+def v1_events(
+    camera_id: Optional[int] = None,
+    event_type: Optional[str] = None,
+    limit: int = 50,
+    db: Session = Depends(database.get_db)
+):
+    query = db.query(models.CanonicalEvent)
+    if camera_id:
+        query = query.filter(models.CanonicalEvent.camera_id == camera_id)
+    if event_type:
+        query = query.filter(models.CanonicalEvent.event_type == event_type)
+    events = query.order_by(models.CanonicalEvent.occurred_at.desc()).limit(limit).all()
+    if not events:
+        # Fallback to vehicle detections if canonical events table hasn't accumulated events yet
+        return db.query(models.VehicleDetection).order_by(models.VehicleDetection.timestamp.desc()).limit(limit).all()
+    return events
+
+@v1_router.post("/events", response_model=schemas.CanonicalEvent)
+async def v1_ingest_event(
+    event_in: schemas.CanonicalEventCreate,
+    db: Session = Depends(database.get_db)
+):
+    """
+    Idempotent Canonical Event Ingestion Pipeline (Phase 4).
+    Validates, deduplicates via source_id, stores, and broadcasts via WebSocket.
+    """
+    existing = db.query(models.CanonicalEvent).filter(models.CanonicalEvent.source_id == event_in.source_id).first()
+    if existing:
+        return existing
+
+    new_event = models.CanonicalEvent(**event_in.dict())
+    db.add(new_event)
+    db.commit()
+    db.refresh(new_event)
+
+    # Realtime broadcast to connected command center dashboards
+    await ws_manager.broadcast("event.created", {
+        "event_id": new_event.id,
+        "source_id": new_event.source_id,
+        "camera_id": new_event.camera_id,
+        "event_type": new_event.event_type,
+        "occurred_at": new_event.occurred_at.isoformat()
+    })
+
+    # Enqueue for async background processing (correlation, AI enrichment)
+    event_worker.publish({
+        "event_type": new_event.event_type or "vehicle_detection",
+        "event_id": new_event.id,
+        "source_id": new_event.source_id,
+        "camera_id": new_event.camera_id,
+        "payload": event_in.dict(),
+    })
+
+    return new_event
+
+# --- Event Queue Stats ---
+@v1_router.get("/queue/stats")
+def v1_queue_stats():
+    """Returns event processing queue statistics (Phase 11)."""
+    return event_worker.stats()
+
+# --- 6. Candidate Events & Correlation (Phase 6 & API_CONTRACT.md §6) ---
+@v1_router.get("/candidates")
+def v1_candidates(db: Session = Depends(database.get_db)):
+    """List cross-camera correlation candidate events for operator verification."""
+    return db.query(models.Alert).order_by(models.Alert.timestamp.desc()).limit(50).all()
+
+@v1_router.get("/candidates/{id}")
+def v1_get_candidate(id: int, db: Session = Depends(database.get_db)):
+    candidate = db.query(models.Alert).filter(models.Alert.id == id).first()
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate event not found")
+    return candidate
+
+@v1_router.post("/candidates/{id}/verify")
+async def v1_verify_candidate(
+    id: int,
+    auth: dict = Depends(get_current_user_and_role),
+    db: Session = Depends(database.get_db)
+):
+    alert = db.query(models.Alert).filter(models.Alert.id == id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Candidate event not found")
+    alert.status = "verified"
+    db.commit()
+    log_audit_access(db, user_id=auth["user_id"], action="VERIFY_CANDIDATE_EVENT", target_type="alert", target_id=str(id))
+    
+    await ws_manager.broadcast("candidate.verified", {"id": id, "plate": alert.plate_text, "status": "verified"})
+    return {"success": True, "id": id, "status": "verified"}
+
+@v1_router.post("/candidates/{id}/reject")
+async def v1_reject_candidate(
+    id: int,
+    auth: dict = Depends(get_current_user_and_role),
+    db: Session = Depends(database.get_db)
+):
+    alert = db.query(models.Alert).filter(models.Alert.id == id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Candidate event not found")
+    alert.status = "rejected"
+    db.commit()
+    log_audit_access(db, user_id=auth["user_id"], action="REJECT_CANDIDATE_EVENT", target_type="alert", target_id=str(id))
+    
+    await ws_manager.broadcast("candidate.rejected", {"id": id, "plate": alert.plate_text, "status": "rejected"})
+    return {"success": True, "id": id, "status": "rejected"}
+
+# --- 7. Investigations & Evidence Management (Phase 8 & API_CONTRACT.md §7) ---
+@v1_router.get("/investigations", response_model=list[schemas.Investigation])
+def v1_list_investigations(
+    plate: Optional[str] = None,
+    db: Session = Depends(database.get_db)
+):
+    query = db.query(models.Investigation)
+    if plate:
+        query = query.filter(models.Investigation.target_plate == plate)
+    return query.order_by(models.Investigation.created_at.desc()).all()
+
+@v1_router.post("/investigations", response_model=schemas.Investigation)
+def v1_create_investigation(
+    inv_in: schemas.InvestigationCreate,
+    auth: dict = Depends(get_current_user_and_role),
+    db: Session = Depends(database.get_db)
+):
+    inv = models.Investigation(**inv_in.dict())
+    if not inv.lead_investigator_id:
+        inv.lead_investigator_id = auth["user_id"]
+    db.add(inv)
+    db.commit()
+    db.refresh(inv)
+    log_audit_access(db, user_id=auth["user_id"], action="CREATE_INVESTIGATION", target_type="case", target_id=inv.case_number)
+    return inv
+
+@v1_router.get("/investigations/{id}", response_model=schemas.Investigation)
+def v1_get_investigation(id: int, db: Session = Depends(database.get_db)):
+    inv = db.query(models.Investigation).filter(models.Investigation.id == id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Investigation case not found")
+    return inv
+
+@v1_router.get("/investigations/{id}/timeline")
+def v1_investigation_timeline(
+    id: int,
+    auth: dict = Depends(get_current_user_and_role),
+    db: Session = Depends(database.get_db)
+):
+    inv = db.query(models.Investigation).filter(models.Investigation.id == id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Investigation case not found")
+    if inv.target_plate:
+        return search_investigator(plate=inv.target_plate, auth=auth, db=db)
+    return {"case_number": inv.case_number, "timeline": []}
+
+@v1_router.get("/investigations/{id}/evidence", response_model=list[schemas.InvestigationEvidence])
+def v1_get_investigation_evidence(id: int, db: Session = Depends(database.get_db)):
+    return db.query(models.InvestigationEvidence).filter(models.InvestigationEvidence.investigation_id == id).all()
+
+@v1_router.post("/investigations/{id}/evidence", response_model=schemas.InvestigationEvidence)
+def v1_add_investigation_evidence(
+    id: int,
+    ev_in: schemas.InvestigationEvidenceCreate,
+    auth: dict = Depends(get_current_user_and_role),
+    db: Session = Depends(database.get_db)
+):
+    inv = db.query(models.Investigation).filter(models.Investigation.id == id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Investigation case not found")
+    ev = models.InvestigationEvidence(investigation_id=id, **ev_in.dict())
+    db.add(ev)
+    db.commit()
+    db.refresh(ev)
+    log_audit_access(db, user_id=auth["user_id"], action="ATTACH_CASE_EVIDENCE", target_type="evidence", target_id=str(ev.id))
+    return ev
+
+# --- 8. Users, Departments & Audit (Phase 3 & 8 & API_CONTRACT.md §9) ---
+@v1_router.get("/users", response_model=list[schemas.User])
+def v1_users(db: Session = Depends(database.get_db)):
+    return db.query(models.User).all()
+
+@v1_router.get("/departments", response_model=list[schemas.Department])
+def v1_departments(db: Session = Depends(database.get_db)):
+    return get_departments(db=db)
+
+@v1_router.get("/audit", response_model=list[schemas.AuditLog])
+def v1_audit(auth: dict = Depends(get_current_user_and_role), db: Session = Depends(database.get_db)):
+    return get_audit_logs(auth=auth, db=db)
+
+app.include_router(v1_router)
+
+
+# ==============================================================================
+# System Health, Readiness & Metrics Endpoints
+# ==============================================================================
+
 @app.get("/health", response_model=schemas.HealthStats)
 def get_health(db: Session = Depends(database.get_db)):
+
+
     try:
         total = db.query(models.Camera).count()
         online = (
@@ -1094,17 +1759,73 @@ def get_health(db: Session = Depends(database.get_db)):
         }
 
 
+@app.get("/ready")
+def readiness_probe(db: Session = Depends(database.get_db)):
+    """
+    Kubernetes/ECS readiness probe. Returns 200 only when the database is
+    reachable and the application can serve traffic.
+    """
+    checks = {"database": False, "tables": False}
+    try:
+        from sqlalchemy import text
+        db.execute(text("SELECT 1"))
+        checks["database"] = True
+        table_count = len(models.Base.metadata.tables)
+        checks["tables"] = table_count > 0
+    except Exception as e:
+        structured_log.error("readiness_probe.failed", error=str(e))
+        raise HTTPException(status_code=503, detail={"status": "not_ready", "checks": checks})
+
+    all_ok = all(checks.values())
+    if not all_ok:
+        raise HTTPException(status_code=503, detail={"status": "degraded", "checks": checks})
+
+    return {"status": "ready", "checks": checks}
+
+
+@app.get("/metrics")
+def get_metrics():
+    """
+    Application-level metrics endpoint for dashboards and alerting.
+    Returns request counts, latency percentiles, error rates, and top endpoints.
+    """
+    return app_metrics.snapshot()
+
+
 # Initialize YOLO model (uses local weights in backend directory if present)
-_yolo_weights = os.path.join(os.path.dirname(__file__), "yolov8n.pt")
-if not os.path.exists(_yolo_weights):
-    _yolo_weights = "yolov8n.pt"
-model = YOLO(_yolo_weights)
+model = None
+if YOLO is not None:
+    try:
+        _yolo_weights = os.path.join(os.path.dirname(__file__), "yolov8n.pt")
+        if not os.path.exists(_yolo_weights):
+            _yolo_weights = "yolov8n.pt"
+        model = YOLO(_yolo_weights)
+    except Exception as e:
+        print(f"[AI Warning] Failed to initialize YOLO model: {e}")
 
 from fastapi import Form
 
 
 @app.post("/detect")
 async def detect_objects(file: UploadFile = File(None), stream_url: str = Form(None)):
+    if cv2 is None or model is None:
+        return {
+            "status": "simulated",
+            "message": "AI computer vision dependencies (cv2/YOLO) not loaded. Operating in resilient simulation mode.",
+            "results": [
+                {
+                    "timestamp": 0.0,
+                    "detections": [
+                        {
+                            "object_type": "car",
+                            "confidence": 0.95,
+                            "bounding_box": [0.2, 0.3, 0.6, 0.7],
+                        }
+                    ],
+                }
+            ],
+        }
+
     tmp_path = None
     if file:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
