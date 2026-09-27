@@ -1,0 +1,14 @@
+{
+  "event_id": "8f14e45f-ceea-4b19-9d2c-000000000002",
+  "source": "camera_lobby_01",
+  "source_type": "camera",
+  "event_type": "FaceDetection",
+  "timestamp": "2026-09-26T10:00:02.500Z",
+  "zone_id": "zone_lobby",
+  "confidence": 0.91,
+  "metadata": {
+    "face_id": "unresolved",
+    "gender_estimate": "unknown",
+    "bounding_box": [150, 90, 210, 150]
+  }
+}

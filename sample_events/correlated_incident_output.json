@@ -1,0 +1,14 @@
+{
+  "incident_id": "c2a9f7e0-1234-4a5b-9c0d-abcdef123456",
+  "incident_type": "intrusion_suspected",
+  "zone_id": "zone_lobby",
+  "confidence": 0.92,
+  "first_seen": "2026-09-26T10:00:00.000Z",
+  "last_seen": "2026-09-26T10:00:05.000Z",
+  "contributing_events": [
+    "b3f1a2c4-0000-0000-0000-000000000001",
+    "b3f1a2c4-0000-0000-0000-000000000003"
+  ],
+  "summary": "1 motion event(s) and 1 entry event(s) in zone 'zone_lobby' within 30s with no access badge-in.",
+  "metadata": {}
+}
