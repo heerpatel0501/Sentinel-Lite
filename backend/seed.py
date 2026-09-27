@@ -71,11 +71,12 @@ def seed_database_if_empty():
         db.commit()
 
         # 4. Users
+        default_pwd_hash = "$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW"
         users = [
-            models.User(email="admin@gujaratpolice.gov.in", department_id=1, role="admin"),
-            models.User(email="analyst@rto.gujarat.gov.in", department_id=2, role="analyst"),
-            models.User(email="monitor@gsrtc.in", department_id=3, role="viewer"),
-            models.User(email="civic@ahmedabadcity.gov.in", department_id=4, role="analyst"),
+            models.User(email="admin@gujaratpolice.gov.in", password_hash=default_pwd_hash, department_id=1, role="admin"),
+            models.User(email="analyst@rto.gujarat.gov.in", password_hash=default_pwd_hash, department_id=2, role="analyst"),
+            models.User(email="monitor@gsrtc.in", password_hash=default_pwd_hash, department_id=3, role="viewer"),
+            models.User(email="civic@ahmedabadcity.gov.in", password_hash=default_pwd_hash, department_id=4, role="analyst"),
         ]
         db.add_all(users)
         db.commit()
@@ -179,9 +180,9 @@ def seed_database_if_empty():
 
         # 11. Audit Logs
         audits = [
-            models.AuditLog(user_id=1, action="VIEW_ALERT_FEED", target_type="alert", target_id="ALL", timestamp=now - timedelta(hours=2)),
-            models.AuditLog(user_id=2, action="WATCHLIST_QUERY", target_type="watchlist", target_id="GJ01AB1234", timestamp=now - timedelta(hours=1)),
-            models.AuditLog(user_id=1, action="EXPORT_CROSS_DEPT_TRAIL", target_type="vehicle_movement", target_id="GJ05-XX-9999", timestamp=now - timedelta(minutes=30)),
+            models.AuditLog(user_id=1, action="VIEW_ALERT_FEED", target_type="alert", target_id="ALL", details={"role": "admin"}, timestamp=now - timedelta(hours=2)),
+            models.AuditLog(user_id=2, action="WATCHLIST_QUERY", target_type="watchlist", target_id="GJ01AB1234", details={"role": "analyst"}, timestamp=now - timedelta(hours=1)),
+            models.AuditLog(user_id=1, action="EXPORT_CROSS_DEPT_TRAIL", target_type="vehicle_movement", target_id="GJ05-XX-9999", details={"role": "admin"}, timestamp=now - timedelta(minutes=30)),
         ]
         db.add_all(audits)
         db.commit()

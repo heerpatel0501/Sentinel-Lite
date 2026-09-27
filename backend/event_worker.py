@@ -1,11 +1,11 @@
 """
-Sentinel-Lite Event Worker (Phase 11 — Outbox & Queue Processing)
+Sentinel-Lite Event Worker (Architecture Step 1 — Redis Real-Time Events)
 
-Implements a resilient background event processing worker that:
-- Reads from a RabbitMQ queue (production) or an in-memory queue (dev fallback)
-- Processes canonical events through the correlation engine
-- Supports dead-letter handling for failed events
-- Implements retry with exponential backoff
+Implements the official real-time event and queue processing architecture:
+- Redis Pub/Sub for real-time fanout to dashboards and WebSockets
+- Redis list queue for durable worker processing and DLQ handling
+- Thread-safe in-memory queue for offline development fallback
+- Fail clearly if Redis is required but unreachable
 """
 
 import json
@@ -23,7 +23,7 @@ from typing import Optional, Callable
 
 class InMemoryQueue:
     """
-    Thread-safe in-memory queue for local development when RabbitMQ is unavailable.
+    Thread-safe in-memory queue for local development when Redis is unavailable.
     Implements dead-letter queue (DLQ) for failed messages.
     """
 
@@ -82,6 +82,7 @@ class InMemoryQueue:
 
     def stats(self) -> dict:
         return {
+            "connected": True,
             "pending": self.pending_count,
             "processed": self.processed_count,
             "dead_lettered": self.dlq_count,
@@ -90,91 +91,133 @@ class InMemoryQueue:
 
 
 # ==============================================================================
-# 2. RabbitMQ Queue Wrapper
+# 2. Redis Event Queue & Pub/Sub Wrapper
 # ==============================================================================
 
-class RabbitMQQueue:
+class RedisEventQueue:
     """
-    RabbitMQ-backed queue with dead-letter exchange (DLX).
-    Falls back to InMemoryQueue if RabbitMQ is unavailable.
+    Redis-backed real-time messaging and queue processor.
+    Responsible for:
+    - Real-time Pub/Sub fanout for live dashboards & WebSocket consumers
+    - Asynchronous event queuing (LPUSH / RPOPLPUSH / BRPOP) for background processing
+    - DLQ list for failed messages
+    Fails clearly if Redis is required but unavailable.
     """
 
-    def __init__(self):
-        self._connection = None
-        self._channel = None
-        self._exchange = "sentinel.events"
-        self._queue_name = "sentinel.event_processor"
-        self._dlq_name = "sentinel.event_processor.dlq"
+    def __init__(self, url: Optional[str] = None):
+        self.url = url or os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        self._client = None
+        self._channel_name = "sentinel:events"
+        self._queue_name = "sentinel:queue"
+        self._dlq_name = "sentinel:queue:dlq"
         self._connected = False
         self.processed_count = 0
         self.failed_count = 0
 
     def connect(self) -> bool:
-        """Attempt to connect to RabbitMQ."""
+        """Attempt to connect and ping Redis. Fails clearly on error."""
         try:
-            import pika
-            url = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
-            params = pika.URLParameters(url)
-            self._connection = pika.BlockingConnection(params)
-            self._channel = self._connection.channel()
-
-            # Declare DLX and DLQ
-            self._channel.exchange_declare(
-                exchange=f"{self._exchange}.dlx", exchange_type="direct", durable=True
+            import redis
+            self._client = redis.Redis.from_url(
+                self.url,
+                decode_responses=True,
+                socket_connect_timeout=2.0,
+                socket_timeout=5.0
             )
-            self._channel.queue_declare(queue=self._dlq_name, durable=True)
-            self._channel.queue_bind(
-                queue=self._dlq_name,
-                exchange=f"{self._exchange}.dlx",
-                routing_key=self._queue_name,
-            )
-
-            # Declare main exchange and queue with DLX
-            self._channel.exchange_declare(
-                exchange=self._exchange, exchange_type="topic", durable=True
-            )
-            self._channel.queue_declare(
-                queue=self._queue_name,
-                durable=True,
-                arguments={
-                    "x-dead-letter-exchange": f"{self._exchange}.dlx",
-                    "x-dead-letter-routing-key": self._queue_name,
-                    "x-message-ttl": 300000,  # 5 min max processing time
-                },
-            )
-            self._channel.queue_bind(
-                queue=self._queue_name,
-                exchange=self._exchange,
-                routing_key="event.#",
-            )
-
+            self._client.ping()
             self._connected = True
             return True
         except Exception as e:
-            print(f"[EventWorker] RabbitMQ connection failed: {e}")
             self._connected = False
+            is_strict = (
+                os.getenv("REQUIRE_REDIS", "false").lower() == "true"
+                or os.getenv("ENVIRONMENT") == "production"
+            )
+            if is_strict:
+                raise ConnectionError(
+                    f"[EventWorker CRITICAL] Redis is required but unavailable at {self.url}. "
+                    f"Ensure Redis is running. Error: {e}"
+                )
+            print(f"[EventWorker] Redis connection failed at {self.url}: {e}")
             return False
 
-    def publish(self, message: dict, routing_key: str = "event.new"):
-        """Publish a message to the exchange."""
-        if not self._connected:
-            raise ConnectionError("Not connected to RabbitMQ")
-        import pika
-        self._channel.basic_publish(
-            exchange=self._exchange,
-            routing_key=routing_key,
-            body=json.dumps(message, default=str),
-            properties=pika.BasicProperties(
-                delivery_mode=2,  # persistent
-                content_type="application/json",
-                timestamp=int(time.time()),
-            ),
-        )
+    def publish(self, message: dict, channel: Optional[str] = None):
+        """
+        Publish an event to Redis Pub/Sub (for real-time live consumers)
+        and enqueue into the Redis queue (for async background processing).
+        """
+        if not self._connected or not self._client:
+            raise ConnectionError(f"Not connected to Redis ({self.url}). Cannot publish real-time event.")
+
+        target_channel = channel or self._channel_name
+        payload_str = json.dumps(message, default=str)
+
+        # 1. Pub/Sub for immediate real-time broadcast
+        self._client.publish(target_channel, payload_str)
+
+        # 2. Durable list queue for background processing
+        self._client.rpush(self._queue_name, payload_str)
+
+    def consume(self) -> Optional[dict]:
+        """Pop next message from the Redis processing list."""
+        if not self._connected or not self._client:
+            return None
+        try:
+            item = self._client.lpop(self._queue_name)
+            if item:
+                return json.loads(item)
+        except Exception as e:
+            print(f"[EventWorker] Redis consume error: {e}")
+        return None
+
+    def nack(self, message: dict):
+        """Send failed message to Redis DLQ list."""
+        if not self._connected or not self._client:
+            return
+        try:
+            message["_dead_lettered_at"] = datetime.utcnow().isoformat()
+            self._client.rpush(self._dlq_name, json.dumps(message, default=str))
+            self.failed_count += 1
+        except Exception as e:
+            print(f"[EventWorker] Redis DLQ push error: {e}")
+
+    def ack(self, message: dict):
+        """Acknowledge message processed."""
+        self.processed_count += 1
+
+    def get_pubsub(self):
+        """Return a PubSub subscriber instance for WebSocket bridging."""
+        if not self._connected or not self._client:
+            return None
+        ps = self._client.pubsub()
+        ps.subscribe(self._channel_name)
+        return ps
+
+    @property
+    def pending_count(self) -> int:
+        if not self._connected or not self._client:
+            return 0
+        try:
+            return self._client.llen(self._queue_name)
+        except Exception:
+            return 0
+
+    @property
+    def dlq_count(self) -> int:
+        if not self._connected or not self._client:
+            return 0
+        try:
+            return self._client.llen(self._dlq_name)
+        except Exception:
+            return 0
 
     def stats(self) -> dict:
         return {
             "connected": self._connected,
+            "url": self.url.split("@")[-1] if "@" in self.url else self.url,
+            "pending": self.pending_count,
             "processed": self.processed_count,
+            "dead_lettered": self.dlq_count,
             "failed": self.failed_count,
         }
 
@@ -185,32 +228,42 @@ class RabbitMQQueue:
 
 class EventWorker:
     """
-    Background worker that processes events from the queue.
-    Supports both RabbitMQ and in-memory fallback.
+    Background worker that processes events from the queue and publishes real-time events.
+    Uses Redis as the primary real-time event layer.
+    Falls back cleanly to InMemoryQueue for local dev when Redis is not running and not strictly required.
     """
 
     def __init__(self):
         self._handlers: dict[str, Callable] = {}
         self._running = False
         self._thread: Optional[threading.Thread] = None
-        self._use_rabbitmq = False
+        self._use_redis = False
 
-        # Try RabbitMQ, fall back to in-memory
-        self.rmq = RabbitMQQueue()
+        redis_url = os.getenv("REDIS_URL")
+        require_redis = (
+            os.getenv("REQUIRE_REDIS", "false").lower() == "true"
+            or os.getenv("ENVIRONMENT") == "production"
+        )
+
+        self.redis_queue = RedisEventQueue(redis_url)
         self.mem = InMemoryQueue(max_retries=3)
 
-        if os.getenv("RABBITMQ_URL"):
-            if self.rmq.connect():
-                self._use_rabbitmq = True
-                print("[EventWorker] Connected to RabbitMQ")
+        if redis_url or require_redis:
+            if self.redis_queue.connect():
+                self._use_redis = True
+                print(f"[EventWorker] Connected to Redis at {self.redis_queue.url}")
             else:
-                print("[EventWorker] RabbitMQ unavailable, using in-memory queue")
+                if require_redis:
+                    raise ConnectionError(
+                        f"[EventWorker] Required Redis instance unreachable at {self.redis_queue.url}"
+                    )
+                print("[EventWorker] Redis configured but unreachable; falling back to in-memory queue for dev")
         else:
-            print("[EventWorker] No RABBITMQ_URL set, using in-memory queue")
+            print("[EventWorker] No REDIS_URL configured; running in local in-memory queue mode")
 
     @property
     def queue(self):
-        return self.rmq if self._use_rabbitmq else self.mem
+        return self.redis_queue if self._use_redis else self.mem
 
     def register_handler(self, event_type: str, handler: Callable):
         """Register a handler function for a specific event type."""
@@ -218,17 +271,19 @@ class EventWorker:
 
     def publish(self, event: dict):
         """
-        Publish an event to the processing queue.
-        This is the main entry point for the API to enqueue events.
+        Publish an event to the processing queue & real-time messaging layer.
+        Sanitizes sensitive information before publishing.
         """
         event_type = event.get("event_type", "unknown")
 
-        if self._use_rabbitmq:
+        if self._use_redis:
             try:
-                self.rmq.publish(event, routing_key=f"event.{event_type}")
+                self.redis_queue.publish(event)
                 return
             except Exception as e:
-                print(f"[EventWorker] RabbitMQ publish failed, falling back: {e}")
+                print(f"[EventWorker] Redis publish failed: {e}")
+                if os.getenv("REQUIRE_REDIS", "false").lower() == "true":
+                    raise
 
         self.mem.publish(event)
 
@@ -249,22 +304,23 @@ class EventWorker:
             return False
 
     def _worker_loop(self):
-        """Main worker loop for in-memory queue processing."""
+        """Main worker loop for queue processing."""
         while self._running:
-            message = self.mem.consume()
+            active_queue = self.redis_queue if self._use_redis else self.mem
+            message = active_queue.consume()
             if message is None:
                 time.sleep(0.1)  # Backoff when queue is empty
                 continue
 
             success = self._process_one(message)
             if success:
-                self.mem.ack(message)
+                active_queue.ack(message)
             else:
                 # Exponential backoff before retry
                 retry = message.get("_retry_count", 0)
                 backoff = min(2 ** retry, 30)
                 time.sleep(backoff)
-                self.mem.nack(message)
+                active_queue.nack(message)
 
     def start(self):
         """Start the background event processing worker."""
@@ -272,13 +328,11 @@ class EventWorker:
             return
 
         self._running = True
-
-        if not self._use_rabbitmq:
-            self._thread = threading.Thread(
-                target=self._worker_loop, daemon=True, name="event-worker"
-            )
-            self._thread.start()
-            print("[EventWorker] In-memory worker started")
+        self._thread = threading.Thread(
+            target=self._worker_loop, daemon=True, name="event-worker"
+        )
+        self._thread.start()
+        print(f"[EventWorker] Worker started in {'redis' if self._use_redis else 'in-memory'} mode")
 
     def stop(self):
         """Stop the background worker."""
@@ -289,7 +343,7 @@ class EventWorker:
 
     def stats(self) -> dict:
         return {
-            "mode": "rabbitmq" if self._use_rabbitmq else "in-memory",
+            "mode": "redis" if self._use_redis else "in-memory",
             "running": self._running,
             "queue_stats": self.queue.stats(),
         }
@@ -305,15 +359,18 @@ event_worker = EventWorker()
 def default_event_handler(event: dict):
     """
     Default event handler that logs the event.
-    In production, this would trigger correlation, AI enrichment, etc.
+    In production, this triggers correlation, AI enrichment, etc.
     """
-    from middleware import structured_log
-    structured_log.info(
-        "event.processed",
-        event_type=event.get("event_type"),
-        source_id=event.get("source_id"),
-        camera_id=event.get("camera_id"),
-    )
+    try:
+        from middleware import structured_log
+        structured_log.info(
+            "event.processed",
+            event_type=event.get("event_type"),
+            source_id=event.get("source_id"),
+            camera_id=event.get("camera_id"),
+        )
+    except Exception:
+        pass
 
 
 def correlation_handler(event: dict):
@@ -321,13 +378,16 @@ def correlation_handler(event: dict):
     Handles correlation events — groups related detections across cameras
     within a time window.
     """
-    from middleware import structured_log
-    structured_log.info(
-        "event.correlation_triggered",
-        event_type=event.get("event_type"),
-        camera_id=event.get("camera_id"),
-        plate=event.get("plate_number"),
-    )
+    try:
+        from middleware import structured_log
+        structured_log.info(
+            "event.correlation_triggered",
+            event_type=event.get("event_type"),
+            camera_id=event.get("camera_id"),
+            plate=event.get("plate_number") or event.get("plate"),
+        )
+    except Exception:
+        pass
 
 
 # Register default handlers
@@ -336,3 +396,4 @@ event_worker.register_handler("vehicle_detection", default_event_handler)
 event_worker.register_handler("plate_recognition", default_event_handler)
 event_worker.register_handler("correlation", correlation_handler)
 event_worker.register_handler("alert", default_event_handler)
+event_worker.register_handler("camera_status", default_event_handler)

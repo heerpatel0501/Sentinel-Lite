@@ -241,13 +241,14 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     action VARCHAR(100) NOT NULL,
     target_type VARCHAR(50) NOT NULL,
     target_id VARCHAR(100) NOT NULL,
+    details JSON,
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO audit_logs (user_id, action, target_type, target_id, timestamp) VALUES
-(1, 'VIEW_ALERT_FEED', 'alert', 'ALL', CURRENT_TIMESTAMP - INTERVAL '2 hours'),
-(2, 'WATCHLIST_QUERY', 'watchlist', 'GJ01AB1234', CURRENT_TIMESTAMP - INTERVAL '1 hour'),
-(1, 'EXPORT_CROSS_DEPT_TRAIL', 'vehicle_movement', 'GJ05-XX-9999', CURRENT_TIMESTAMP - INTERVAL '30 minutes')
+INSERT INTO audit_logs (user_id, action, target_type, target_id, details, timestamp) VALUES
+(1, 'VIEW_ALERT_FEED', 'alert', 'ALL', '{"role": "admin"}', CURRENT_TIMESTAMP - INTERVAL '2 hours'),
+(2, 'WATCHLIST_QUERY', 'watchlist', 'GJ01AB1234', '{"role": "analyst"}', CURRENT_TIMESTAMP - INTERVAL '1 hour'),
+(1, 'EXPORT_CROSS_DEPT_TRAIL', 'vehicle_movement', 'GJ05-XX-9999', '{"role": "admin"}', CURRENT_TIMESTAMP - INTERVAL '30 minutes')
 ON CONFLICT DO NOTHING;
 
 -- =============================================================================

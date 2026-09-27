@@ -253,6 +253,7 @@ class AuditLogBase(BaseModel):
     action: str
     target_type: str
     target_id: str
+    details: Optional[dict] = None
 
 
 class AuditLog(AuditLogBase):

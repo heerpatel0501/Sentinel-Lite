@@ -351,15 +351,17 @@ def run_tests():
         try:
             headers = {"Authorization": f"Bearer {password}", "X-Password": password}
             r = requests.get(f"https://cctv.corp8.cloud/cameras.json?password={password}", headers=headers, timeout=3)
-            if r.status_code == 200:
+            is_json = "application/json" in r.headers.get("content-type", "")
+            if r.status_code == 200 and is_json:
                 official_status = "PASS"
                 print(f"[*] Official Sentinel Sandbox RTSP: PASS (Connected to official grid catalogue)")
             else:
-                official_status = f"BLOCKED (Sandbox returned HTTP {r.status_code})"
-                print(f"[*] Official Sentinel Sandbox RTSP: BLOCKED (HTTP {r.status_code})")
+                official_status = f"BLOCKED (HTTP {r.status_code} HTML login page returned; valid credentials required)"
+                print(f"[*] Official Sentinel Sandbox RTSP: BLOCKED (HTML login page returned; valid credentials required)")
         except Exception as err:
             official_status = f"BLOCKED (Network unreachable: {err.__class__.__name__})"
             print(f"[*] Official Sentinel Sandbox RTSP: BLOCKED ({err.__class__.__name__})")
+
 
     test_results["TEST 8/8 (Local Simulated RTSP)"] = local_status
     test_results["TEST 8/8 (Official Sentinel RTSP)"] = official_status

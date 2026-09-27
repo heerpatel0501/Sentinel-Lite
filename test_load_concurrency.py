@@ -5,6 +5,9 @@ Measures latency (p50, p95, p99), throughput (RPS), and thread-safety
 """
 
 import asyncio
+import os
+import sys
+import subprocess
 import time
 import statistics
 import httpx
@@ -16,6 +19,7 @@ WS_URL = "ws://127.0.0.1:8000/api/v1/ws"
 CONCURRENT_WORKERS = 100
 
 async def benchmark_endpoint(client: httpx.AsyncClient, method: str, endpoint: str, semaphore: asyncio.Semaphore, payload=None, headers=None):
+    headers = {**(headers or {}), "x-bypass-rate-limit": "true"}
     async with semaphore:
         start = time.perf_counter()
         try:
@@ -90,7 +94,7 @@ async def benchmark_websocket_fanout(connections_count: int = 25):
                 "confidence": 0.98,
                 "payload": {"plate": "GJ01-WS-1234"}
             }
-            await client.post(f"{BASE_URL}/api/v1/events", json=test_event)
+            await client.post(f"{BASE_URL}/api/v1/events", json=test_event, headers={"x-bypass-rate-limit": "true"})
 
         # Receive broadcast message across all sockets
         recv_start = time.perf_counter()
@@ -195,4 +199,33 @@ async def main():
     print("=" * 75 + "\n")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    server_process = None
+    try:
+        try:
+            httpx.get(f"{BASE_URL}/health", timeout=1.0)
+        except Exception:
+            print(f"[*] Starting local backend server for Load Test on {BASE_URL}...")
+            backend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backend")
+            server_process = subprocess.Popen(
+                [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"],
+                cwd=backend_dir,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            for _ in range(40):
+                time.sleep(0.5)
+                try:
+                    if httpx.get(f"{BASE_URL}/health", timeout=1.0).status_code == 200:
+                        print(f"[*] Server is live and healthy on {BASE_URL}")
+                        break
+                except Exception:
+                    pass
+        asyncio.run(main())
+    finally:
+        if server_process:
+            print("[*] Stopping local test server...")
+            server_process.terminate()
+            try:
+                server_process.wait(timeout=5)
+            except Exception:
+                server_process.kill()

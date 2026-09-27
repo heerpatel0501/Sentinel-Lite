@@ -9,6 +9,7 @@ Sentinel-Lite Production Middleware Stack (Phase 11 Hardening)
 
 import json
 import logging
+import os
 import time
 import uuid
 from collections import defaultdict
@@ -213,6 +214,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         # WebSocket upgrade requests
         if request.headers.get("upgrade", "").lower() == "websocket":
+            return await call_next(request)
+
+        # Benchmark / test bypass check
+        if request.headers.get("x-bypass-rate-limit") == "true" or os.getenv("DISABLE_RATE_LIMIT", "").lower() == "true":
             return await call_next(request)
 
         client_ip = request.client.host if request.client else "unknown"

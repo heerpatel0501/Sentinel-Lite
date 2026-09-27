@@ -11,7 +11,15 @@ services:
     ports:
       - "5432:5432"
     volumes:
+      - postgres_data:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    container_name: sentinel_redis
+    ports:
+      - "6379:6379"
     restart: always
 
   backend:
@@ -21,11 +29,14 @@ services:
       - "8000:8000"
     depends_on:
       - db
+      - redis
     environment:
       DATABASE_URL: postgresql://sentinel:sentinel_password@db:5432/sentinel_db
+      REDIS_URL: redis://redis:6379/0
       RELAY_INTERNAL_URL: http://mediamtx:8888
       RELAY_PUBLIC_URL: http://localhost:8888
     restart: always
+
 
   frontend:
     build: ./frontend

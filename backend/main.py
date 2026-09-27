@@ -1,6 +1,8 @@
+import asyncio
 import hashlib
 import os
 import re
+
 import shutil
 import sys
 import tempfile
@@ -30,6 +32,7 @@ import json as _json
 import database
 import models
 import schemas
+import vms_adapters
 from middleware import register_production_middleware, metrics as app_metrics, structured_log
 from event_worker import event_worker
 
@@ -63,16 +66,53 @@ seed.seed_database_if_empty()
 
 app = FastAPI(title="Sentinel-Lite API")
 
-# Start event worker on app boot
+# Real-time Event Worker & Redis Pub/Sub WebSocket Bridge
+redis_sub_task = None
+
+async def redis_pubsub_bridge():
+    """
+    Subscribes to Redis Pub/Sub events and broadcasts them in real time
+    to all active WebSocket connections across command center dashboards.
+    """
+    try:
+        ps = event_worker.redis_queue.get_pubsub()
+        if not ps:
+            return
+        loop = asyncio.get_event_loop()
+        while True:
+            msg = await loop.run_in_executor(None, ps.get_message, True, 1.0)
+            if msg and msg.get("type") == "message":
+                raw_data = msg.get("data")
+                if isinstance(raw_data, str):
+                    try:
+                        parsed = _json.loads(raw_data)
+                        event_type = parsed.get("event_type", "event.update")
+                        await ws_manager.broadcast(event_type, parsed)
+                    except Exception:
+                        pass
+            await asyncio.sleep(0.05)
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        structured_log.warning("redis_pubsub.bridge_error", error=str(e))
+
 @app.on_event("startup")
-def startup_event_worker():
+async def startup_event_worker():
+    global redis_sub_task
     event_worker.start()
     structured_log.info("event_worker.started", mode=event_worker.stats()["mode"])
+    if event_worker._use_redis:
+        redis_sub_task = asyncio.create_task(redis_pubsub_bridge())
+        structured_log.info("redis_pubsub.bridge_started")
 
 @app.on_event("shutdown")
-def shutdown_event_worker():
+async def shutdown_event_worker():
+    global redis_sub_task
+    if redis_sub_task and not redis_sub_task.done():
+        redis_sub_task.cancel()
     event_worker.stop()
     structured_log.info("event_worker.stopped")
+
 
 # Mount evidence snapshots directory for investigator verification
 evidence_base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "evidence")
@@ -171,652 +211,7 @@ def log_audit_access(db: Session, user_id: int, action: str, target_type: str, t
 
 @app.on_event("startup")
 def startup_event():
-    db = database.SessionLocal()
-    try:
-        now = datetime.now()
-
-        # 1. SEED CAMERAS
-        if db.query(models.Camera).count() == 0:
-            print("Seeding database with mock cameras...")
-            cameras_data = [
-                # Ahmedabad
-                (
-                    "AHM-Junction-01",
-                    23.0225,
-                    72.5714,
-                    "Police",
-                    "Milestone",
-                    "online",
-                    "1080p",
-                ),
-                (
-                    "AHM-Traffic-02",
-                    23.0250,
-                    72.5740,
-                    "RTO",
-                    "Hikvision",
-                    "online",
-                    "4K",
-                ),
-                (
-                    "AHM-BusStop-03",
-                    23.0200,
-                    72.5700,
-                    "GSRTC",
-                    "Genetec",
-                    "online",
-                    "1080p",
-                ),
-                (
-                    "AHM-Park-04",
-                    23.0300,
-                    72.5800,
-                    "Municipal",
-                    "Dahua",
-                    "offline",
-                    "720p",
-                ),
-                # Rajkot
-                (
-                    "RJK-MainRoad-01",
-                    22.3039,
-                    70.8022,
-                    "Police",
-                    "Genetec",
-                    "online",
-                    "1080p",
-                ),
-                (
-                    "RJK-Crossroad-02",
-                    22.3050,
-                    70.8050,
-                    "RTO",
-                    "Milestone",
-                    "online",
-                    "4K",
-                ),
-                (
-                    "RJK-Station-03",
-                    22.3000,
-                    70.8000,
-                    "GSRTC",
-                    "Hikvision",
-                    "offline",
-                    "1080p",
-                ),
-                (
-                    "RJK-Square-04",
-                    22.3100,
-                    70.8100,
-                    "Municipal",
-                    "Milestone",
-                    "online",
-                    "720p",
-                ),
-                # Surat
-                (
-                    "SRT-Highway-01",
-                    21.1702,
-                    72.8311,
-                    "Police",
-                    "Hikvision",
-                    "online",
-                    "4K",
-                ),
-                ("SRT-Toll-02", 21.1750, 72.8350, "RTO", "Dahua", "online", "1080p"),
-                (
-                    "SRT-Depot-03",
-                    21.1650,
-                    72.8250,
-                    "GSRTC",
-                    "Genetec",
-                    "online",
-                    "1080p",
-                ),
-                (
-                    "SRT-Market-04",
-                    21.1800,
-                    72.8400,
-                    "Municipal",
-                    "Milestone",
-                    "online",
-                    "1080p",
-                ),
-                # Vadodara
-                (
-                    "VAD-Entry-01",
-                    22.3072,
-                    73.1812,
-                    "Police",
-                    "Milestone",
-                    "online",
-                    "1080p",
-                ),
-                ("VAD-Bridge-02", 22.3100, 73.1850, "RTO", "Genetec", "offline", "4K"),
-                (
-                    "VAD-Terminal-03",
-                    22.3000,
-                    73.1750,
-                    "GSRTC",
-                    "Hikvision",
-                    "online",
-                    "1080p",
-                ),
-                (
-                    "VAD-Plaza-04",
-                    22.3150,
-                    73.1900,
-                    "Municipal",
-                    "Dahua",
-                    "online",
-                    "720p",
-                ),
-                # Gandhinagar
-                (
-                    "GND-Secretariat-01",
-                    23.2156,
-                    72.6369,
-                    "Police",
-                    "Genetec",
-                    "online",
-                    "4K",
-                ),
-                (
-                    "GND-Circle-02",
-                    23.2200,
-                    72.6400,
-                    "RTO",
-                    "Milestone",
-                    "online",
-                    "1080p",
-                ),
-                (
-                    "GND-BusStand-03",
-                    23.2100,
-                    72.6300,
-                    "GSRTC",
-                    "Dahua",
-                    "online",
-                    "1080p",
-                ),
-                (
-                    "GND-Sector-04",
-                    23.2250,
-                    72.6450,
-                    "Municipal",
-                    "Hikvision",
-                    "offline",
-                    "1080p",
-                ),
-            ]
-            for name, lat, lng, dept, vendor, status, res in cameras_data:
-                cam = models.Camera(
-                    name=name,
-                    latitude=lat,
-                    longitude=lng,
-                    department=dept,
-                    vms_vendor=vendor,
-                    status=status,
-                    resolution=res,
-                )
-                db.add(cam)
-
-            # Add a mock ONVIF Camera for testing
-            onvif_cam = models.Camera(
-                name="TEST-ONVIF-01",
-                latitude=23.0,
-                longitude=72.0,
-                department="Police",
-                vms_vendor="ONVIF",
-                status="online",
-                resolution="1080p",
-                onvif_host="192.168.1.64",
-                onvif_port=80,
-                onvif_username="admin",
-                onvif_password=os.getenv("ONVIF_TEST_PASSWORD", "vault_demo_key"),
-            )
-            db.add(onvif_cam)
-            db.commit()
-
-        # 2. SEED DEPARTMENTS (5 real Gujarat departments)
-        if db.query(models.Department).count() == 0:
-            print("Seeding departments table...")
-            departments_data = [
-                ("Police", "controlroom@gujaratpolice.gov.in"),
-                ("RTO", "helpdesk-rto@gujarat.gov.in"),
-                ("GSRTC", "centraltransit@gsrtc.in"),
-                ("Municipal", "smartcity@ahmedabadcity.gov.in"),
-                ("Panchayat", "panchayat-sec@gujarat.gov.in"),
-            ]
-            for name, email in departments_data:
-                dept = models.Department(name=name, contact_email=email)
-                db.add(dept)
-            db.commit()
-
-        # 3. SEED WATCHLIST (5 realistic Gujarat format plates)
-        # [MOCKED SEED DATA]: Demonstrates the state-level stolen/wanted vehicle watchlist lookup logic.
-        if db.query(models.Watchlist).count() == 0:
-            print("Seeding watchlist table...")
-            watchlist_data = [
-                ("GJ01AB1234", "stolen", "Police", True),
-                ("GJ05XX9999", "wanted", "Police", True),
-                ("GJ03MC4567", "flagged", "RTO", True),
-                ("GJ18ZZ0001", "flagged", "Police", True),
-                ("GJ06CD5555", "stolen", "Police", False),
-            ]
-            for plate, reason, dept, active in watchlist_data:
-                w = models.Watchlist(
-                    plate_text=plate,
-                    reason=reason,
-                    added_by_department=dept,
-                    active=active,
-                )
-                db.add(w)
-            db.commit()
-
-        # 4. SEED SAMPLE VEHICLE DETECTIONS, PLATES, AND EVIDENCE RECORDS FIRST
-        if db.query(models.VehicleDetection).count() == 0:
-            print("Seeding initial vehicle_detections, plates, and evidence_records...")
-            # Detection 1
-            det1 = models.VehicleDetection(
-                camera_id=1,
-                timestamp=now - timedelta(minutes=45),
-                vehicle_type="car",
-                confidence_score=0.94,
-                bounding_box=[0.22, 0.55, 0.51, 0.76],
-                frame_snapshot_path="/evidence/snapshots/evidence_cam1_seed_GJ01AB1234.jpg"
-            )
-            db.add(det1)
-            db.flush()
-
-            plate1 = models.Plate(
-                detection_id=det1.id,
-                plate_text="GJ01-AB-1234",
-                normalized_plate="GJ01-AB-1234",
-                ocr_confidence=0.96,
-                plate_bounding_box=[0.35, 0.65, 0.45, 0.72]
-            )
-            db.add(plate1)
-
-            ev1 = models.EvidenceRecord(
-                detection_id=det1.id,
-                plate_text="GJ01-AB-1234",
-                file_path=os.path.join(snapshots_dir, "evidence_cam1_seed_GJ01AB1234.jpg"),
-                uri_reference="/evidence/snapshots/evidence_cam1_seed_GJ01AB1234.jpg",
-                captured_at=now - timedelta(minutes=45),
-                pts_timestamp=12.4,
-                file_size_bytes=42150,
-                sha256_hash="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-            )
-            db.add(ev1)
-
-            # Detection 2
-            det2 = models.VehicleDetection(
-                camera_id=2,
-                timestamp=now - timedelta(minutes=30),
-                vehicle_type="car",
-                confidence_score=0.91,
-                bounding_box=[0.25, 0.52, 0.48, 0.74],
-                frame_snapshot_path="/evidence/snapshots/evidence_cam2_seed_GJ01AB1234.jpg"
-            )
-            db.add(det2)
-            db.flush()
-
-            plate2 = models.Plate(
-                detection_id=det2.id,
-                plate_text="GJ01-AB-1234",
-                normalized_plate="GJ01-AB-1234",
-                ocr_confidence=0.93,
-                plate_bounding_box=[0.33, 0.62, 0.44, 0.70]
-            )
-            db.add(plate2)
-
-            ev2 = models.EvidenceRecord(
-                detection_id=det2.id,
-                plate_text="GJ01-AB-1234",
-                file_path=os.path.join(snapshots_dir, "evidence_cam2_seed_GJ01AB1234.jpg"),
-                uri_reference="/evidence/snapshots/evidence_cam2_seed_GJ01AB1234.jpg",
-                captured_at=now - timedelta(minutes=30),
-                pts_timestamp=28.1,
-                file_size_bytes=45820,
-                sha256_hash="f5a79854e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b"
-            )
-            db.add(ev2)
-
-            # Detection 3
-            det3 = models.VehicleDetection(
-                camera_id=11,
-                timestamp=now - timedelta(minutes=20),
-                vehicle_type="bus",
-                confidence_score=0.89,
-                bounding_box=[0.15, 0.30, 0.60, 0.85],
-                frame_snapshot_path="/evidence/snapshots/evidence_cam11_seed_GJ05XX9999.jpg"
-            )
-            db.add(det3)
-            db.flush()
-
-            plate3 = models.Plate(
-                detection_id=det3.id,
-                plate_text="GJ05-XX-9999",
-                normalized_plate="GJ05-XX-9999",
-                ocr_confidence=0.91,
-                plate_bounding_box=[0.28, 0.68, 0.40, 0.76]
-            )
-            db.add(plate3)
-
-            ev3 = models.EvidenceRecord(
-                detection_id=det3.id,
-                plate_text="GJ05-XX-9999",
-                file_path=os.path.join(snapshots_dir, "evidence_cam11_seed_GJ05XX9999.jpg"),
-                uri_reference="/evidence/snapshots/evidence_cam11_seed_GJ05XX9999.jpg",
-                captured_at=now - timedelta(minutes=20),
-                pts_timestamp=45.6,
-                file_size_bytes=51200,
-                sha256_hash="d8c3f4e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b92"
-            )
-            db.add(ev3)
-            db.commit()
-
-        # 5. SEED VEHICLE MOVEMENTS (With detection_id FK for full evidence traceability)
-        if db.query(models.VehicleMovement).count() == 0:
-            print("Seeding vehicle_movements table with detection traceability...")
-            d1_id = db.query(models.VehicleDetection.id).filter(models.VehicleDetection.camera_id == 1).first()
-            d2_id = db.query(models.VehicleDetection.id).filter(models.VehicleDetection.camera_id == 2).first()
-            d3_id = db.query(models.VehicleDetection.id).filter(models.VehicleDetection.camera_id == 11).first()
-            det1_fk = d1_id[0] if d1_id else None
-            det2_fk = d2_id[0] if d2_id else None
-            det3_fk = d3_id[0] if d3_id else None
-
-            movements_data = [
-                # Target 1: GJ01-AB-1234 (seen across Police, RTO, Municipal)
-                (
-                    "GJ01-AB-1234",
-                    1,
-                    1,
-                    now - timedelta(minutes=45),
-                ),  # AHM-Junction-01 (Police)
-                (
-                    "GJ01-AB-1234",
-                    2,
-                    2,
-                    now - timedelta(minutes=30),
-                ),  # AHM-Traffic-02 (RTO)
-                (
-                    "GJ01-AB-1234",
-                    4,
-                    4,
-                    now - timedelta(minutes=10),
-                ),  # AHM-Park-04 (Municipal)
-                # Target 2: GJ05-XX-9999 (seen across Police, GSRTC)
-                (
-                    "GJ05-XX-9999",
-                    9,
-                    1,
-                    now - timedelta(minutes=60),
-                ),  # SRT-Highway-01 (Police)
-                (
-                    "GJ05-XX-9999",
-                    11,
-                    3,
-                    now - timedelta(minutes=20),
-                ),  # SRT-Depot-03 (GSRTC)
-                # Target 3: GJ03-MC-4567 (seen across RTO, Municipal)
-                (
-                    "GJ03-MC-4567",
-                    6,
-                    2,
-                    now - timedelta(minutes=75),
-                ),  # RJK-Crossroad-02 (RTO)
-                (
-                    "GJ03-MC-4567",
-                    8,
-                    4,
-                    now - timedelta(minutes=35),
-                ),  # RJK-Square-04 (Municipal)
-                # Target 4: GJ18-ZZ-0001 (seen across Police, RTO)
-                (
-                    "GJ18-ZZ-0001",
-                    17,
-                    1,
-                    now - timedelta(minutes=80),
-                ),  # GND-Secretariat-01 (Police)
-                (
-                    "GJ18-ZZ-0001",
-                    18,
-                    2,
-                    now - timedelta(minutes=40),
-                ),  # GND-Circle-02 (RTO)
-                # Target 5: GJ06-CD-5555 (seen across Police, GSRTC)
-                (
-                    "GJ06-CD-5555",
-                    13,
-                    1,
-                    now - timedelta(minutes=95),
-                ),  # VAD-Entry-01 (Police)
-                (
-                    "GJ06-CD-5555",
-                    15,
-                    3,
-                    now - timedelta(minutes=50),
-                ),  # VAD-Terminal-03 (GSRTC)
-                # Other routine state traffic sightings
-                (
-                    "GJ27-AA-1122",
-                    3,
-                    3,
-                    now - timedelta(minutes=110),
-                ),  # AHM-BusStop-03 (GSRTC)
-                (
-                    "GJ02-BB-3344",
-                    10,
-                    2,
-                    now - timedelta(minutes=90),
-                ),  # SRT-Toll-02 (RTO)
-                (
-                    "GJ04-EE-7788",
-                    16,
-                    4,
-                    now - timedelta(minutes=65),
-                ),  # VAD-Plaza-04 (Municipal)
-                (
-                    "GJ01-XY-4455",
-                    1,
-                    1,
-                    now - timedelta(minutes=50),
-                ),  # AHM-Junction-01 (Police)
-                (
-                    "GJ01-XY-4455",
-                    2,
-                    2,
-                    now - timedelta(minutes=15),
-                ),  # AHM-Traffic-02 (RTO)
-            ]
-            for plate, cam_id, dept_id, det_id, ts in movements_data:
-                m = models.VehicleMovement(
-                    plate_text=plate, camera_id=cam_id, department_id=dept_id, detection_id=det_id, timestamp=ts
-                )
-                db.add(m)
-            db.commit()
-
-        # 6. SEED ALERTS
-        if db.query(models.Alert).count() == 0:
-            print("Migrating and seeding real alerts table...")
-            alerts_data = [
-                (
-                    "GJ01-AB-1234",
-                    "cross_department",
-                    ["AHM-Junction-01", "AHM-Traffic-02"],
-                    ["Police", "RTO"],
-                    now - timedelta(minutes=15),
-                    "new",
-                    "Vehicle tracked across Police and RTO cameras.",
-                ),
-                (
-                    "GJ05-XX-9999",
-                    "watchlist_match",
-                    ["SRT-Highway-01", "SRT-Depot-03"],
-                    ["Police", "GSRTC"],
-                    now - timedelta(minutes=25),
-                    "new",
-                    "Suspicious vehicle near GSRTC depot.",
-                ),
-                (
-                    "GJ03-MC-4567",
-                    "speeding",
-                    ["RJK-Crossroad-02", "RJK-Square-04"],
-                    ["RTO", "Municipal"],
-                    now - timedelta(minutes=40),
-                    "reviewed",
-                    "Speeding violation in municipal zone.",
-                ),
-                (
-                    "GJ18-ZZ-0001",
-                    "watchlist_match",
-                    ["GND-Secretariat-01", "GND-Circle-02"],
-                    ["Police", "RTO"],
-                    now - timedelta(minutes=55),
-                    "new",
-                    "VIP convoy route clearance check.",
-                ),
-            ]
-            for plate, atype, cams, depts, ts, status, desc in alerts_data:
-                alt = models.Alert(
-                    plate_text=plate,
-                    alert_type=atype,
-                    camera_ids_involved=cams,
-                    departments_involved=depts,
-                    timestamp=ts,
-                    status=status,
-                    description=desc,
-                )
-                db.add(alt)
-            db.commit()
-
-        # 7. SEED USERS (Role-Based Access Control)
-        if db.query(models.User).count() == 0:
-            print("Seeding users table...")
-            users_data = [
-                ("admin@gujaratpolice.gov.in", 1, "admin"),
-                ("analyst@rto.gujarat.gov.in", 2, "analyst"),
-                ("monitor@gsrtc.in", 3, "viewer"),
-                ("civic@ahmedabadcity.gov.in", 4, "analyst"),
-            ]
-            default_hash = "$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW"
-            for email, dept_id, role in users_data:
-                u = models.User(email=email, password_hash=default_hash, department_id=dept_id, role=role)
-                db.add(u)
-            db.commit()
-
-        # 8. SEED AUDIT LOGS (Access Accountability & Privacy Governance)
-        if db.query(models.AuditLog).count() == 0:
-            print("Seeding audit_logs table...")
-            logs_data = [
-                (1, "VIEW_ALERT_FEED", "alert", "ALL", now - timedelta(hours=2)),
-                (
-                    2,
-                    "WATCHLIST_QUERY",
-                    "watchlist",
-                    "GJ01AB1234",
-                    now - timedelta(hours=1),
-                ),
-                (
-                    1,
-                    "EXPORT_CROSS_DEPT_TRAIL",
-                    "vehicle_movement",
-                    "GJ05-XX-9999",
-                    now - timedelta(minutes=30),
-                ),
-            ]
-            for uid, action, ttype, tid, ts in logs_data:
-                log = models.AuditLog(
-                    user_id=uid,
-                    action=action,
-                    target_type=ttype,
-                    target_id=tid,
-                    timestamp=ts,
-                )
-                db.add(log)
-            db.commit()
-
-        # 9. SEED STREAM HEALTH (Live RTSP Telemetry)
-        if db.query(models.StreamHealth).count() == 0:
-            print("Seeding stream_health table...")
-            cams = db.query(models.Camera).all()
-            for c in cams:
-                sh = models.StreamHealth(
-                    camera_id=c.id,
-                    status="online" if c.status == "online" else "offline",
-                    codec="H.264" if c.id % 2 == 0 else "H.265",
-                    resolution=c.resolution,
-                    last_pts=42.5,
-                    reconnect_attempts=0,
-                    fps_actual=25.0
-                )
-                db.add(sh)
-            db.commit()
-
-        # 10. SEED VMS SYSTEMS (VMS Federation - Phase 1 & 2)
-        if db.query(models.VMSSystem).count() == 0:
-            print("Seeding vms_systems table...")
-            vms_data = [
-                ("Police-Milestone-XProtect", "Milestone", "10.0.1.10", 80, "RTSP", 1, "active"),
-                ("RTO-Hikvision-iVMS", "Hikvision", "10.0.2.10", 8000, "RTSP", 2, "active"),
-                ("GSRTC-Genetec-Center", "Genetec", "10.0.3.10", 443, "RTSP", 3, "active"),
-                ("Municipal-Dahua-DSS", "Dahua", "10.0.4.10", 37777, "RTSP", 4, "active"),
-                ("SmartCity-ONVIF-Gateway", "ONVIF", "192.168.1.64", 80, "ONVIF", 4, "active"),
-                ("Sentinel-Official-RTSP-Grid", "Sentinel", "cctv.corp8.cloud", 554, "RTSP", 1, "active")
-            ]
-            for vname, vendor, host, port, proto, dept_id, status in vms_data:
-                v = models.VMSSystem(
-                    name=vname,
-                    vendor=vendor,
-                    host=host,
-                    port=port,
-                    protocol=proto,
-                    department_id=dept_id,
-                    status=status,
-                    last_sync=now
-                )
-                db.add(v)
-            db.commit()
-
-        # 11. SEED INITIAL INVESTIGATION (Phase 8)
-        if db.query(models.Investigation).count() == 0:
-            print("Seeding investigations table...")
-            inv = models.Investigation(
-                title="Investigation: Cross-Agency Interception of Stolen Vehicle GJ01-AB-1234",
-                case_number="CASE-2026-GUJ-0842",
-                target_plate="GJ01-AB-1234",
-                lead_investigator_id=1,
-                status="active",
-                priority="critical",
-                notes="Target vehicle flagged in state stolen vehicle registry. Reconstructed path across Ahmedabad and Gandhinagar.",
-                created_at=now - timedelta(hours=3),
-                updated_at=now - timedelta(minutes=15)
-            )
-            db.add(inv)
-            db.flush()
-
-            # Attach evidence
-            ev_record = db.query(models.EvidenceRecord).filter(models.EvidenceRecord.plate_text == "GJ01-AB-1234").first()
-            if ev_record:
-                inv_ev = models.InvestigationEvidence(
-                    investigation_id=inv.id,
-                    evidence_record_id=ev_record.id,
-                    title="Camera 1 Forensic Crop Keyframe",
-                    evidence_type="snapshot",
-                    uri=ev_record.uri_reference,
-                    sha256_hash=ev_record.sha256_hash,
-                    notes="Visual confirmation of driver compartment and license plate bumper ROI."
-                )
-                db.add(inv_ev)
-            db.commit()
-
-    except Exception as e:
-        print(f"Error during startup database seeding: {e}")
-        db.rollback()
-    finally:
-        db.close()
+    seed.seed_database_if_empty()
 
 
 
@@ -1522,7 +917,7 @@ def v1_read_camera(camera_id: str, db: Session = Depends(database.get_db)):
 
 @v1_router.get("/cameras/{camera_id}/stream", response_model=schemas.VMSStreamResponse)
 async def v1_read_camera_stream(camera_id: str, db: Session = Depends(database.get_db)):
-    return await read_camera_stream(camera_id=camera_id, db=db)
+    return await get_camera_stream(camera_id=camera_id, db=db)
 
 @v1_router.get("/cameras/{camera_id}/health")
 def v1_camera_health(camera_id: int, db: Session = Depends(database.get_db)):
@@ -1688,7 +1083,7 @@ def v1_investigation_timeline(
     if not inv:
         raise HTTPException(status_code=404, detail="Investigation case not found")
     if inv.target_plate:
-        return search_investigator(plate=inv.target_plate, auth=auth, db=db)
+        return search_plate_investigation(plate=inv.target_plate, auth=auth, db=db)
     return {"case_number": inv.case_number, "timeline": []}
 
 @v1_router.get("/investigations/{id}/evidence", response_model=list[schemas.InvestigationEvidence])

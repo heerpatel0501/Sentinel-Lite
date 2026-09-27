@@ -85,6 +85,20 @@ def ensure_schema_compatibility(target_engine):
                     conn.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)"))
                     conn.commit()
 
+        if "audit_logs" in existing_tables:
+            existing_cols = {col["name"] for col in inspector.get_columns("audit_logs")}
+            if "details" not in existing_cols:
+                with target_engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE audit_logs ADD COLUMN details JSON"))
+                    conn.commit()
+
+        if "vehicle_movements" in existing_tables:
+            existing_cols = {col["name"] for col in inspector.get_columns("vehicle_movements")}
+            if "detection_id" not in existing_cols:
+                with target_engine.connect() as conn:
+                    conn.execute(text("ALTER TABLE vehicle_movements ADD COLUMN detection_id INTEGER"))
+                    conn.commit()
+
     except Exception as err:
         print(f"[DB Migration Warning] Schema compatibility check encountered an issue: {err}")
 

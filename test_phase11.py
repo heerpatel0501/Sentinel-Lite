@@ -13,8 +13,11 @@ Tests all production middleware, event worker, and system observability features
 """
 
 import json
+import os
+import sys
 import time
 import requests
+import subprocess
 import concurrent.futures
 
 BASE = "http://127.0.0.1:8000"
@@ -163,10 +166,11 @@ def test_event_worker():
     stats = r.json()
 
     check("Queue stats endpoint returns 200", r.status_code == 200, str(r.status_code))
-    check("Worker mode is 'in-memory'",
-          stats.get("mode") == "in-memory",
+    check("Worker mode is 'redis' or 'in-memory'",
+          stats.get("mode") in ["redis", "in-memory"],
           stats.get("mode"))
     check("Worker is running", stats.get("running") is True, str(stats.get("running")))
+
 
     # Ingest an event and verify it gets queued
     initial_processed = stats.get("queue_stats", {}).get("processed", 0)
@@ -230,30 +234,60 @@ if __name__ == "__main__":
     print("   Sentinel-Lite Phase 11 Production Hardening Test Suite       ")
     print("================================================================")
 
+    server_process = None
     try:
-        r = requests.get(f"{BASE}/health", timeout=3)
-        assert r.status_code == 200
-    except Exception as e:
-        print(f"\n  [FAIL] Server not reachable at {BASE}: {e}")
-        exit(1)
+        try:
+            r = requests.get(f"{BASE}/health", timeout=1)
+            assert r.status_code == 200
+        except Exception:
+            print(f"[*] Starting local backend server for Phase 11 tests on {BASE}...")
+            backend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backend")
+            server_process = subprocess.Popen(
+                [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"],
+                cwd=backend_dir,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            for _ in range(40):
+                time.sleep(0.5)
+                try:
+                    r = requests.get(f"{BASE}/health", timeout=1)
+                    if r.status_code == 200:
+                        print(f"[*] Server is live and healthy on {BASE}")
+                        break
+                except Exception:
+                    pass
+            else:
+                print(f"\n  [FAIL] Failed to start server at {BASE}")
+                if server_process:
+                    server_process.kill()
+                exit(1)
 
-    test_security_headers()
-    test_request_id()
-    test_response_timing()
-    test_rate_limiting()
-    test_readiness_probe()
-    test_metrics()
-    test_event_worker()
-    test_concurrent_rate_limits()
+        test_security_headers()
+        test_request_id()
+        test_response_timing()
+        test_rate_limiting()
+        test_readiness_probe()
+        test_metrics()
+        test_event_worker()
+        test_concurrent_rate_limits()
 
-    print(f"\n{'='*60}")
-    total = PASS + FAIL
-    print(f"  Results: {PASS}/{total} passed, {FAIL} failed")
+        print(f"\n{'='*60}")
+        total = PASS + FAIL
+        print(f"  Results: {PASS}/{total} passed, {FAIL} failed")
 
-    if FAIL == 0:
-        print("  [PASS] ALL PHASE 11 TESTS PASSED")
-    else:
-        print(f"  [FAIL] {FAIL} TESTS FAILED")
+        if FAIL == 0:
+            print("  [PASS] ALL PHASE 11 TESTS PASSED")
+        else:
+            print(f"  [FAIL] {FAIL} TESTS FAILED")
 
-    print(f"{'='*60}")
-    exit(0 if FAIL == 0 else 1)
+        print(f"{'='*60}")
+        exit(0 if FAIL == 0 else 1)
+    finally:
+        if server_process:
+            print("[*] Stopping local test server...")
+            server_process.terminate()
+            try:
+                server_process.wait(timeout=5)
+            except Exception:
+                server_process.kill()

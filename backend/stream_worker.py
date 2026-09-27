@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 import models
 import database
 from ai_pipeline import SentinelAIEngine
+from event_worker import event_worker
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("SentinelStreamWorker")
@@ -71,7 +72,22 @@ class SentinelStreamWorker(threading.Thread):
             health.last_pts = round(pts, 2)
             health.reconnect_attempts = self.reconnect_attempts
             db.commit()
+
+            # Publish real-time camera/stream status update to Redis
+            try:
+                event_worker.publish({
+                    "event_type": "camera_status",
+                    "camera_id": self.camera_id,
+                    "camera_name": self.camera_name,
+                    "status": status,
+                    "pts": round(pts, 2),
+                    "fps": round(fps, 1),
+                    "timestamp": datetime.utcnow().isoformat(),
+                })
+            except Exception as pe:
+                logger.debug(f"[Cam {self.camera_id}] Real-time stream status publish skipped: {pe}")
         except Exception as e:
+
             logger.error(f"[Cam {self.camera_id}] Failed to update stream health: {e}")
             db.rollback()
         finally:
@@ -83,9 +99,11 @@ class SentinelStreamWorker(threading.Thread):
             return
 
         db: Session = database.SessionLocal()
+        realtime_events = []
         try:
             now = datetime.utcnow()
             for d in detections:
+                alert = None
                 # 1. vehicle_detections
                 v_det = models.VehicleDetection(
                     camera_id=self.camera_id,
@@ -100,6 +118,30 @@ class SentinelStreamWorker(threading.Thread):
 
                 # 2. plates
                 plate_to_check = d.get("normalized_plate") or d.get("plate_text") or "UNKNOWN"
+
+                # Record real-time vehicle detection event for Redis fanout
+                realtime_events.append({
+                    "event_type": "vehicle_detection",
+                    "camera_id": self.camera_id,
+                    "camera_name": self.camera_name,
+                    "detection_id": v_det.id,
+                    "plate": plate_to_check,
+                    "vehicle_type": d["vehicle_type"],
+                    "confidence": round(float(d["confidence_score"]), 2),
+                    "timestamp": now.isoformat(),
+                })
+
+                if d.get("plate_text") and d["plate_text"] != "UNKNOWN":
+                    realtime_events.append({
+                        "event_type": "plate_recognition",
+                        "camera_id": self.camera_id,
+                        "camera_name": self.camera_name,
+                        "detection_id": v_det.id,
+                        "plate": plate_to_check,
+                        "ocr_confidence": round(float(d.get("ocr_confidence", 0.0)), 2),
+                        "timestamp": now.isoformat(),
+                    })
+
                 plate_entry = models.Plate(
                     detection_id=v_det.id,
                     plate_text=d["plate_text"],
@@ -108,6 +150,7 @@ class SentinelStreamWorker(threading.Thread):
                     plate_bounding_box=d["plate_box_norm"]
                 )
                 db.add(plate_entry)
+
 
                 # 3. evidence_records
                 evidence = models.EvidenceRecord(
@@ -189,12 +232,33 @@ class SentinelStreamWorker(threading.Thread):
                         )
                         db.add(alert)
 
+                # Queue real-time alert event if one was generated
+                if alert:
+                    realtime_events.append({
+                        "event_type": "alert",
+                        "alert_type": alert.alert_type,
+                        "camera_id": self.camera_id,
+                        "camera_name": self.camera_name,
+                        "plate": plate_to_check,
+                        "description": alert.description,
+                        "departments_involved": alert.departments_involved,
+                        "timestamp": now.isoformat(),
+                    })
+
             db.commit()
+
+            # Publish all real-time events to Redis after persistent storage in PostgreSQL
+            for ev in realtime_events:
+                try:
+                    event_worker.publish(ev)
+                except Exception as pe:
+                    logger.debug(f"[Cam {self.camera_id}] Real-time event publish skipped: {pe}")
         except Exception as ex:
             logger.error(f"[Cam {self.camera_id}] Error persisting detections: {ex}")
             db.rollback()
         finally:
             db.close()
+
 
     def run(self):
         if self.is_official_sandbox:
