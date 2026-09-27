@@ -1,88 +1,70 @@
+version: '3.8'
 
-# Sentinel Lite
+services:
+  db:
+    image: postgis/postgis:15-3.3
+    container_name: sentinel_db
+    environment:
+      POSTGRES_USER: sentinel
+      POSTGRES_PASSWORD: sentinel_password
+      POSTGRES_DB: sentinel_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    restart: always
 
-Sentinel Lite is a security monitoring and event-processing project.
+  redis:
+    image: redis:7-alpine
+    container_name: sentinel_redis
+    ports:
+      - "6379:6379"
+    restart: always
 
-## Project Components
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: sentinel_rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: sentinel
+      RABBITMQ_DEFAULT_PASS: sentinel_pw
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    restart: always
 
-The repository contains the main Sentinel Lite application along with the Event Processing and Correlation service.
+  backend:
+    build: ./backend
+    container_name: sentinel_backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - redis
+    environment:
+      DATABASE_URL: postgresql://sentinel:sentinel_password@db:5432/sentinel_db
+      REDIS_URL: redis://redis:6379/0
+      RELAY_INTERNAL_URL: http://mediamtx:8888
+      RELAY_PUBLIC_URL: http://localhost:8888
+    restart: always
 
-### Main Application
+  frontend:
+    build: ./frontend
+    container_name: sentinel_frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    restart: always
 
-- Backend
-- Frontend
-- PostgreSQL/PostGIS
-- Redis
-- MediaMTX
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: sentinel_mediamtx
+    ports:
+      - "8554:8554"
+      - "8888:8888"
+      - "8889:8889"
+    restart: always
 
-### Member 3 — Event Processing + Correlation
-
-The Member 3 service processes raw security events through RabbitMQ.
-
-Flow:
-
-Raw Events
-→ RabbitMQ
-→ Event Processing
-→ Normalization
-→ Correlation Engine
-→ Processed Events
-
-## Event Processing Service
-
-The Member 3 implementation is located in:
-
-```text
-src/
-├── consumer.py
-├── correlation_engine.py
-├── main.py
-├── models.py
-├── normalizer.py
-├── producer.py
-├── rabbitmq_client.py
-└── topology.py
-
-sample_events/
-├── correlated_incident_output.json
-├── raw_door_sensor.json
-├── raw_face_detect.json
-├── raw_line_crossing.json
-└── raw_motion.json
-
-scripts/publish_test_events.py
-
-docker-compose.yml
-
-event_processing.raw
-
-py -3.13 -m venv .venv
-
-.venv\Scripts\Activate.ps1
-
-python -m pip install -r requirements.txt
-
-docker compose up -d
-
-python -m src.topology
-
-python -m src.main
-
-python scripts/publish_test_events.py
-
-pytest
-
-sentinel-lite-event-processor/
-├── backend/
-├── frontend/
-├── config/
-├── db/
-├── deploy/
-├── docs/
-├── sample_events/
-├── scripts/
-├── src/
-├── tests/
-├── docker-compose.yml
-├── requirements.txt
-└── README.md
+volumes:
+  postgres_data:
