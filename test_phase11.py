@@ -1,5 +1,5 @@
 """
-Sentinel-Lite Phase 11 Production Hardening — Comprehensive Test Suite
+Sentinel-Lite Phase 11 Production Hardening - Comprehensive Test Suite
 
 Tests all production middleware, event worker, and system observability features:
 1. Rate limiting enforcement
@@ -26,14 +26,14 @@ def check(name, condition, detail=""):
     global PASS, FAIL
     if condition:
         PASS += 1
-        print(f"  ✓ {name}")
+        print(f"  [PASS] {name}")
     else:
         FAIL += 1
-        print(f"  ✗ {name} — {detail}")
+        print(f"  [FAIL] {name} - {detail}")
 
 
 def test_security_headers():
-    print("\n═══ STAGE 1: Security Headers ═══")
+    print("\n=== STAGE 1: Security Headers ===")
     r = requests.get(f"{BASE}/api/v1/dashboard/summary")
 
     check("X-Content-Type-Options: nosniff",
@@ -62,7 +62,7 @@ def test_security_headers():
 
 
 def test_request_id():
-    print("\n═══ STAGE 2: Request ID Injection ═══")
+    print("\n=== STAGE 2: Request ID Injection ===")
 
     # Auto-generated request ID
     r = requests.get(f"{BASE}/health")
@@ -80,7 +80,7 @@ def test_request_id():
 
 
 def test_response_timing():
-    print("\n═══ STAGE 3: Response Timing ═══")
+    print("\n=== STAGE 3: Response Timing ===")
     r = requests.get(f"{BASE}/health")
     timing = r.headers.get("X-Response-Time-Ms")
     check("X-Response-Time-Ms header present",
@@ -93,7 +93,7 @@ def test_response_timing():
 
 
 def test_rate_limiting():
-    print("\n═══ STAGE 4: Rate Limiting ═══")
+    print("\n=== STAGE 4: Rate Limiting ===")
 
     # Check rate limit headers
     r = requests.get(f"{BASE}/api/v1/dashboard/summary")
@@ -117,7 +117,7 @@ def test_rate_limiting():
 
 
 def test_readiness_probe():
-    print("\n═══ STAGE 5: Readiness Probe ═══")
+    print("\n=== STAGE 5: Readiness Probe ===")
 
     r = requests.get(f"{BASE}/ready")
     data = r.json()
@@ -131,7 +131,7 @@ def test_readiness_probe():
 
 
 def test_metrics():
-    print("\n═══ STAGE 6: Metrics Endpoint ═══")
+    print("\n=== STAGE 6: Metrics Endpoint ===")
 
     # Make a few requests to seed metrics
     for _ in range(3):
@@ -156,7 +156,7 @@ def test_metrics():
 
 
 def test_event_worker():
-    print("\n═══ STAGE 7: Event Worker Queue ═══")
+    print("\n=== STAGE 7: Event Worker Queue ===")
 
     # Check initial queue stats
     r = requests.get(f"{BASE}/api/v1/queue/stats")
@@ -197,7 +197,7 @@ def test_event_worker():
 
 
 def test_concurrent_rate_limits():
-    print("\n═══ STAGE 8: Concurrent Rate Limit Stress ═══")
+    print("\n=== STAGE 8: Concurrent Rate Limit Stress ===")
 
     # Send 50 concurrent requests
     results = []
@@ -226,15 +226,15 @@ def test_concurrent_rate_limits():
 
 
 if __name__ == "__main__":
-    print("╔══════════════════════════════════════════════════════════════╗")
-    print("║  Sentinel-Lite Phase 11 Production Hardening Test Suite     ║")
-    print("╚══════════════════════════════════════════════════════════════╝")
+    print("+==============================================================+")
+    print("|  Sentinel-Lite Phase 11 Production Hardening Test Suite     |")
+    print("+==============================================================+")
 
     try:
         r = requests.get(f"{BASE}/health", timeout=3)
         assert r.status_code == 200
     except Exception as e:
-        print(f"\n  ✗ Server not reachable at {BASE}: {e}")
+        print(f"\n  [FAIL] Server not reachable at {BASE}: {e}")
         exit(1)
 
     test_security_headers()
@@ -251,9 +251,9 @@ if __name__ == "__main__":
     print(f"  Results: {PASS}/{total} passed, {FAIL} failed")
 
     if FAIL == 0:
-        print("  ✓ ALL PHASE 11 TESTS PASSED")
+        print("  [PASS] ALL PHASE 11 TESTS PASSED")
     else:
-        print(f"  ✗ {FAIL} TESTS FAILED")
+        print(f"  [FAIL] {FAIL} TESTS FAILED")
 
     print(f"{'='*60}")
     exit(0 if FAIL == 0 else 1)
