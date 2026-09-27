@@ -1,22 +1,88 @@
-version: "3.8"
 
-services:
-  rabbitmq:
-    image: rabbitmq:3.13-management
-    container_name: sentinel_rabbitmq
-    ports:
-      - "5672:5672"     # AMQP
-      - "15672:15672"   # Management UI
-    environment:
-      RABBITMQ_DEFAULT_USER: sentinel
-      RABBITMQ_DEFAULT_PASS: sentinel_pw
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+# Sentinel Lite
 
-volumes:
-  rabbitmq_data:
+Sentinel Lite is a security monitoring and event-processing project.
+
+## Project Components
+
+The repository contains the main Sentinel Lite application along with the Event Processing and Correlation service.
+
+### Main Application
+
+- Backend
+- Frontend
+- PostgreSQL/PostGIS
+- Redis
+- MediaMTX
+
+### Member 3 — Event Processing + Correlation
+
+The Member 3 service processes raw security events through RabbitMQ.
+
+Flow:
+
+Raw Events
+→ RabbitMQ
+→ Event Processing
+→ Normalization
+→ Correlation Engine
+→ Processed Events
+
+## Event Processing Service
+
+The Member 3 implementation is located in:
+
+```text
+src/
+├── consumer.py
+├── correlation_engine.py
+├── main.py
+├── models.py
+├── normalizer.py
+├── producer.py
+├── rabbitmq_client.py
+└── topology.py
+
+sample_events/
+├── correlated_incident_output.json
+├── raw_door_sensor.json
+├── raw_face_detect.json
+├── raw_line_crossing.json
+└── raw_motion.json
+
+scripts/publish_test_events.py
+
+docker-compose.yml
+
+event_processing.raw
+
+py -3.13 -m venv .venv
+
+.venv\Scripts\Activate.ps1
+
+python -m pip install -r requirements.txt
+
+docker compose up -d
+
+python -m src.topology
+
+python -m src.main
+
+python scripts/publish_test_events.py
+
+pytest
+
+sentinel-lite-event-processor/
+├── backend/
+├── frontend/
+├── config/
+├── db/
+├── deploy/
+├── docs/
+├── sample_events/
+├── scripts/
+├── src/
+├── tests/
+├── docker-compose.yml
+├── requirements.txt
+└── README.md

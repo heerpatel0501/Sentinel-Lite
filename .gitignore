@@ -1,10 +1,48 @@
-﻿.venv/
+# Python
+.venv/
+venv/
+env/
+backend/venv/
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+backend/__pycache__/
+*.py[cod]
+*.egg-info/
 .pytest_cache/
-.vscode/
+dist/
+build/
+
+# Node
+node_modules/
+frontend/node_modules/
+
+# Environment variables & secrets
 .env
+*.env
+backend/.env
+!.env.example
+!backend/.env.example
+
+# Local databases
+*.db
+*.sqlite3
+backend/*.db
+backend/sentinel.db
+
+# Logs
 *.log
+
+# OS & Editor
 .DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Playwright & test scratch
+videos/
+record_demo.py
+record_demo2.py
+final_hackathon_demo.webm
+
+# Runtime evidence snapshots
+backend/evidence/snapshots/evidence_cam*_*_*.jpg
+!backend/evidence/snapshots/*seed*
