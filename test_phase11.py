@@ -1,5 +1,5 @@
 """
-Sentinel-Lite Phase 11 Production Hardening — Comprehensive Test Suite
+Sentinel-Lite Phase 11 Production Hardening - Comprehensive Test Suite
 
 Tests all production middleware, event worker, and system observability features:
 1. Rate limiting enforcement
@@ -13,11 +13,8 @@ Tests all production middleware, event worker, and system observability features
 """
 
 import json
-import os
-import sys
 import time
 import requests
-import subprocess
 import concurrent.futures
 
 BASE = "http://127.0.0.1:8000"
@@ -32,11 +29,11 @@ def check(name, condition, detail=""):
         print(f"  [PASS] {name}")
     else:
         FAIL += 1
-        print(f"  [FAIL] {name} — {detail}")
+        print(f"  [FAIL] {name} - {detail}")
 
 
 def test_security_headers():
-    print("\n═══ STAGE 1: Security Headers ═══")
+    print("\n=== STAGE 1: Security Headers ===")
     r = requests.get(f"{BASE}/api/v1/dashboard/summary")
 
     check("X-Content-Type-Options: nosniff",
@@ -65,7 +62,7 @@ def test_security_headers():
 
 
 def test_request_id():
-    print("\n═══ STAGE 2: Request ID Injection ═══")
+    print("\n=== STAGE 2: Request ID Injection ===")
 
     # Auto-generated request ID
     r = requests.get(f"{BASE}/health")
@@ -83,7 +80,7 @@ def test_request_id():
 
 
 def test_response_timing():
-    print("\n═══ STAGE 3: Response Timing ═══")
+    print("\n=== STAGE 3: Response Timing ===")
     r = requests.get(f"{BASE}/health")
     timing = r.headers.get("X-Response-Time-Ms")
     check("X-Response-Time-Ms header present",
@@ -96,7 +93,7 @@ def test_response_timing():
 
 
 def test_rate_limiting():
-    print("\n═══ STAGE 4: Rate Limiting ═══")
+    print("\n=== STAGE 4: Rate Limiting ===")
 
     # Check rate limit headers
     r = requests.get(f"{BASE}/api/v1/dashboard/summary")
@@ -120,7 +117,7 @@ def test_rate_limiting():
 
 
 def test_readiness_probe():
-    print("\n═══ STAGE 5: Readiness Probe ═══")
+    print("\n=== STAGE 5: Readiness Probe ===")
 
     r = requests.get(f"{BASE}/ready")
     data = r.json()
@@ -134,7 +131,7 @@ def test_readiness_probe():
 
 
 def test_metrics():
-    print("\n═══ STAGE 6: Metrics Endpoint ═══")
+    print("\n=== STAGE 6: Metrics Endpoint ===")
 
     # Make a few requests to seed metrics
     for _ in range(3):
@@ -159,18 +156,17 @@ def test_metrics():
 
 
 def test_event_worker():
-    print("\n═══ STAGE 7: Event Worker Queue ═══")
+    print("\n=== STAGE 7: Event Worker Queue ===")
 
     # Check initial queue stats
     r = requests.get(f"{BASE}/api/v1/queue/stats")
     stats = r.json()
 
     check("Queue stats endpoint returns 200", r.status_code == 200, str(r.status_code))
-    check("Worker mode is 'redis' or 'in-memory'",
-          stats.get("mode") in ["redis", "in-memory"],
+    check("Worker mode is 'in-memory'",
+          stats.get("mode") == "in-memory",
           stats.get("mode"))
     check("Worker is running", stats.get("running") is True, str(stats.get("running")))
-
 
     # Ingest an event and verify it gets queued
     initial_processed = stats.get("queue_stats", {}).get("processed", 0)
@@ -201,7 +197,7 @@ def test_event_worker():
 
 
 def test_concurrent_rate_limits():
-    print("\n═══ STAGE 8: Concurrent Rate Limit Stress ═══")
+    print("\n=== STAGE 8: Concurrent Rate Limit Stress ===")
 
     # Send 50 concurrent requests
     results = []
@@ -230,64 +226,34 @@ def test_concurrent_rate_limits():
 
 
 if __name__ == "__main__":
-    print("================================================================")
-    print("   Sentinel-Lite Phase 11 Production Hardening Test Suite       ")
-    print("================================================================")
+    print("+==============================================================+")
+    print("|  Sentinel-Lite Phase 11 Production Hardening Test Suite     |")
+    print("+==============================================================+")
 
-    server_process = None
     try:
-        try:
-            r = requests.get(f"{BASE}/health", timeout=1)
-            assert r.status_code == 200
-        except Exception:
-            print(f"[*] Starting local backend server for Phase 11 tests on {BASE}...")
-            backend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backend")
-            server_process = subprocess.Popen(
-                [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"],
-                cwd=backend_dir,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-            for _ in range(40):
-                time.sleep(0.5)
-                try:
-                    r = requests.get(f"{BASE}/health", timeout=1)
-                    if r.status_code == 200:
-                        print(f"[*] Server is live and healthy on {BASE}")
-                        break
-                except Exception:
-                    pass
-            else:
-                print(f"\n  [FAIL] Failed to start server at {BASE}")
-                if server_process:
-                    server_process.kill()
-                exit(1)
+        r = requests.get(f"{BASE}/health", timeout=3)
+        assert r.status_code == 200
+    except Exception as e:
+        print(f"\n  [FAIL] Server not reachable at {BASE}: {e}")
+        exit(1)
 
-        test_security_headers()
-        test_request_id()
-        test_response_timing()
-        test_rate_limiting()
-        test_readiness_probe()
-        test_metrics()
-        test_event_worker()
-        test_concurrent_rate_limits()
+    test_security_headers()
+    test_request_id()
+    test_response_timing()
+    test_rate_limiting()
+    test_readiness_probe()
+    test_metrics()
+    test_event_worker()
+    test_concurrent_rate_limits()
 
-        print(f"\n{'='*60}")
-        total = PASS + FAIL
-        print(f"  Results: {PASS}/{total} passed, {FAIL} failed")
+    print(f"\n{'='*60}")
+    total = PASS + FAIL
+    print(f"  Results: {PASS}/{total} passed, {FAIL} failed")
 
-        if FAIL == 0:
-            print("  [PASS] ALL PHASE 11 TESTS PASSED")
-        else:
-            print(f"  [FAIL] {FAIL} TESTS FAILED")
+    if FAIL == 0:
+        print("  [PASS] ALL PHASE 11 TESTS PASSED")
+    else:
+        print(f"  [FAIL] {FAIL} TESTS FAILED")
 
-        print(f"{'='*60}")
-        exit(0 if FAIL == 0 else 1)
-    finally:
-        if server_process:
-            print("[*] Stopping local test server...")
-            server_process.terminate()
-            try:
-                server_process.wait(timeout=5)
-            except Exception:
-                server_process.kill()
+    print(f"{'='*60}")
+    exit(0 if FAIL == 0 else 1)
