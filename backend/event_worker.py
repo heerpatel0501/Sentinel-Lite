@@ -424,7 +424,7 @@ class EventWorker:
 
     def stats(self) -> dict:
         return {
-            "mode": "redis" if self._use_redis else "in-memory-fallback",
+            "mode": "redis" if self._use_redis else "in-memory",
             "production_ready": self._use_redis,
             "running": self._running,
             "queue_stats": self.queue.stats(),

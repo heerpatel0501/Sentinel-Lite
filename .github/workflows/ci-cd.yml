@@ -59,21 +59,38 @@ jobs:
 
       - name: Install dependencies
         run: |
-          cd backend
-          pip install -r requirements.txt || pip install fastapi uvicorn sqlalchemy python-dotenv pyjwt requests python-multipart
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install -r requirements.txt
           pip install httpx pytest pytest-asyncio
 
       - name: Start backend server
         run: |
           cd backend
-          python -m uvicorn main:app --host 0.0.0.0 --port 8000 &
-          sleep 5
+          nohup python -m uvicorn main:app --host 0.0.0.0 --port 8000 > backend.log 2>&1 &
+
+      - name: Wait for backend readiness
+        run: |
+          for i in {1..30}; do
+            if curl -fsS http://localhost:8000/health > /dev/null 2>&1; then
+              echo "Backend is ready."
+              exit 0
+            fi
+            echo "Waiting for backend to initialize ($i/30)..."
+            sleep 2
+          done
+          echo "Backend failed to start within 60s."
+          cat backend/backend.log || true
+          exit 1
 
       - name: Run E2E pipeline tests
         run: python test_e2e_pipeline.py
 
       - name: Run Phase 11 verification
         run: python test_phase11.py
+
+      - name: Run Unit & Integration tests
+        run: python -m pytest tests/ -v
 
       - name: Health check
         run: |
@@ -130,13 +147,16 @@ jobs:
 
       - name: Check for AWS Credentials
         id: check-aws
+        env:
+          AWS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
-          if [ -n "${{ secrets.AWS_ACCESS_KEY_ID }}" ] && [ -n "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+          if [ -n "$AWS_KEY" ] && [ -n "$AWS_SECRET" ]; then
             echo "has_aws=true" >> $GITHUB_OUTPUT
             echo "AWS credentials detected. Will build and push to Amazon ECR."
           else
             echo "has_aws=false" >> $GITHUB_OUTPUT
-            echo "Notice: AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY not configured in GitHub Secrets. Validating Docker build locally without pushing."
+            echo "Notice: AWS credentials not configured in GitHub Secrets. Validating Docker build locally without pushing."
           fi
 
       - name: Configure AWS credentials
