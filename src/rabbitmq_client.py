@@ -1,26 +1,35 @@
 """
-Thin wrapper around pika (blocking connection) with:
-  - automatic reconnect/retry on startup
-  - a helper to publish JSON messages with persistence
-  - a helper to consume with manual ack + dead-lettering on repeated failure
+[RETIRED ARCHITECTURE ARTIFACT - ADR-003]
+RabbitMQ has been officially retired from Sentinel-Lite in favor of Redis Pub/Sub
+(sentinel:events) and Redis list queues (sentinel:queue / sentinel:queue:dlq).
+This file is preserved solely as a historical reference and is NOT used in active
+production execution paths. Use `src/redis_client.py` instead.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from typing import Callable, Dict, Optional
 
-import pika
+try:
+    import pika
+except ImportError:
+    pika = None
+
 import yaml
 
 logger = logging.getLogger("sentinel.rabbitmq")
 
 
 def load_config(path: str = "config/config.yaml") -> dict:
-    with open(path, "r") as f:
-        return yaml.safe_load(f)
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            return yaml.safe_load(f) or {}
+    return {}
+
 
 
 class RabbitMQClient:

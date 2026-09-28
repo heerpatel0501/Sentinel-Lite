@@ -6,7 +6,7 @@ import re
 import shutil
 import sys
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 import requests
@@ -695,22 +695,32 @@ def ingest_correlated_event(
     db: Session = Depends(database.get_db)
 ):
     """
-    ADR-006 & Phase 9: External Microservice Event Correlation Ingestion Bridge.
-    Receives events from RabbitMQ workers, loitering/tailgating models, or edge door sensors
+    ADR-003, ADR-006 & Phase 9: External Microservice Event Correlation Ingestion Bridge.
+    Receives events from Redis workers, loitering/tailgating models, or edge sensors
     and correlates them directly into the state-wide alerts feed.
     """
-    new_alert = models.Alert(
-        plate_text=event.plate_text or "SENSOR-CORRELATION",
-        alert_type=event.event_type,
-        camera_ids_involved=event.camera_ids,
-        departments_involved=event.departments,
-        timestamp=datetime.utcnow(),
-        status="new",
-        description=event.description
-    )
-    db.add(new_alert)
-    db.commit()
-    db.refresh(new_alert)
+    if not event.event_type or not str(event.event_type).strip():
+        raise HTTPException(status_code=422, detail="event_type must be a non-empty string")
+    if not event.camera_ids:
+        raise HTTPException(status_code=422, detail="camera_ids list cannot be empty")
+
+    now = datetime.now(timezone.utc)
+    try:
+        new_alert = models.Alert(
+            plate_text=event.plate_text or "SENSOR-CORRELATION",
+            alert_type=event.event_type,
+            camera_ids_involved=event.camera_ids,
+            departments_involved=event.departments,
+            timestamp=now,
+            status="new",
+            description=event.description
+        )
+        db.add(new_alert)
+        db.commit()
+        db.refresh(new_alert)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error saving correlated alert: {e}")
 
     log_audit_access(
         db,
@@ -721,11 +731,44 @@ def ingest_correlated_event(
         details={"event_type": event.event_type, "cameras": event.camera_ids}
     )
 
+    # Publish through event_worker pipeline (Redis Pub/Sub & processing queue)
+    event_worker.publish({
+        "event_type": "correlation",
+        "alert_id": new_alert.id,
+        "alert_type": event.event_type,
+        "camera_ids": event.camera_ids,
+        "departments": event.departments,
+        "plate": new_alert.plate_text,
+        "description": event.description,
+        "timestamp": now.isoformat(),
+        "status": "candidate",
+    })
+
+    # Direct realtime fanout to WebSockets if bridge isn't running
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                ws_manager.broadcast("correlation", {
+                    "alert_id": new_alert.id,
+                    "event_type": event.event_type,
+                    "camera_ids": event.camera_ids,
+                    "departments": event.departments,
+                    "plate": new_alert.plate_text,
+                    "description": event.description,
+                    "timestamp": now.isoformat(),
+                }),
+                loop
+            )
+    except Exception:
+        pass
+
     return schemas.CorrelatedEventResponse(
         success=True,
         alert_id=new_alert.id,
         message=f"Event '{event.event_type}' successfully correlated into state alerts table"
     )
+
 
 # ==============================================================================
 # Realtime WebSocket Layer (Phase 5 — docs/docs/IMPLEMENTATION_PLAN.md)

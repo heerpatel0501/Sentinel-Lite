@@ -30,6 +30,9 @@ CANONICAL_EVENT_TYPES = {
     "object_left",
     "access_granted",
     "access_denied",
+    "vehicle_detection",
+    "plate_recognition",
+    "plate_sighting",
 }
 
 # Maps raw/vendor-specific event_type strings -> canonical type.
@@ -52,6 +55,16 @@ _EVENT_TYPE_ALIASES: Dict[str, str] = {
     "badge_ok": "access_granted",
     "access_denied": "access_denied",
     "badge_denied": "access_denied",
+    "vehicle_detection": "vehicle_detection",
+    "vehicledetection": "vehicle_detection",
+    "vehicle": "vehicle_detection",
+    "plate_recognition": "plate_recognition",
+    "platerecognition": "plate_recognition",
+    "plate_sighting": "plate_sighting",
+    "platesighting": "plate_sighting",
+    "anpr": "plate_recognition",
+    "alpr": "plate_recognition",
+    "license_plate": "plate_recognition",
 }
 
 

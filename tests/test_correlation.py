@@ -124,3 +124,56 @@ def test_incident_cooldown_prevents_duplicate_firing(config):
     # but cooldown should suppress a duplicate incident.
     second = engine.process(event("motion_detected", offset=4))
     assert second == []
+
+
+def test_cross_camera_motion_correlation(config):
+    engine = CorrelationEngine(config)
+    # Camera A detects motion
+    engine.process(event("motion_detected", camera="cam_a", offset=0))
+    # Camera B detects motion in same zone
+    incidents = engine.process(event("motion_detected", camera="cam_b", offset=5))
+    assert len(incidents) == 1
+    inc = incidents[0]
+    assert inc.incident_type == "cross_camera_motion"
+    assert "cam_a" in inc.metadata["camera_ids"]
+    assert "cam_b" in inc.metadata["camera_ids"]
+    assert inc.metadata["candidate_status"] == "candidate"
+
+
+def test_cross_department_plate_correlation(config):
+    engine = CorrelationEngine(config)
+    # Traffic department camera observes plate
+    evt1 = NormalizedEvent(
+        event_id="evt-plate-1",
+        origin_event_id="orig-1",
+        camera_or_sensor_id="traffic_cam_01",
+        source_type="camera",
+        event_type="plate_recognition",
+        timestamp=ts(0),
+        zone_id="zone_highway",
+        confidence=0.92,
+        attributes={"plate": "GJ01-AB-1234", "department": "RTO"},
+    )
+    engine.process(evt1)
+
+    # Police department camera observes same plate
+    evt2 = NormalizedEvent(
+        event_id="evt-plate-2",
+        origin_event_id="orig-2",
+        camera_or_sensor_id="police_cam_02",
+        source_type="camera",
+        event_type="plate_recognition",
+        timestamp=ts(10),
+        zone_id="zone_highway",
+        confidence=0.95,
+        attributes={"plate": "GJ01-AB-1234", "department": "Police"},
+    )
+    incidents = engine.process(evt2)
+    assert len(incidents) == 1
+    inc = incidents[0]
+    assert inc.incident_type == "cross_department_sighting"
+    assert "Police" in inc.metadata["departments"]
+    assert "RTO" in inc.metadata["departments"]
+    assert inc.metadata["plate_text"] == "GJ01-AB-1234"
+    assert inc.metadata["candidate_status"] == "candidate"
+

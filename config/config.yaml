@@ -1,30 +1,20 @@
-rabbitmq:
-  host: localhost
-  port: 5672
-  vhost: "/"
-  user: sentinel
-  password: sentinel_pw
-  heartbeat: 30
-  connection_attempts: 5
-  retry_delay_seconds: 3
-
-exchanges:
-  raw_events: sentinel.raw_events
-  processed_events: sentinel.processed_events
-  dead_letter: sentinel.raw_events.dlx
-
-queues:
-  raw_processing: event_processing.raw
-  dead_letter: event_processing.dlq
-  dashboard: dashboard.processed
-  ai_analytics: ai_analytics.processed
+# Sentinel-Lite Event Processing Configuration (ADR-003: Redis Unified Messaging)
+redis:
+  url: redis://localhost:6379/0
+  channels:
+    events: sentinel:events               # Pub/Sub channel for realtime fanout & WebSocket bridge
+  queues:
+    raw_processing: sentinel:queue        # List queue for background worker processing
+    dead_letter: sentinel:queue:dlq       # Dead-letter queue for failed processing
 
 correlation:
-  window_seconds: 30          # sliding window per zone
+  window_seconds: 30                      # sliding window per zone
   loitering_motion_threshold: 3
   loitering_window_seconds: 60
   tailgate_line_crossing_threshold: 2
   tailgate_window_seconds: 8
+  motion_correlation_camera_threshold: 2  # distinct cameras within window for multi-camera correlation
+  cross_dept_threshold: 2                 # distinct departments for cross-dept plate alert
   confidence_boost_per_event: 0.1
   max_confidence: 1.0
 

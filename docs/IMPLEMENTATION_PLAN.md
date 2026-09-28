@@ -22,7 +22,7 @@ Canonical Normalization
         +--------------------+
         |                    |
         v                    v
-   PostgreSQL             RabbitMQ
+   PostgreSQL        Redis List Queue (sentinel:queue)
         |                    |
         |                    v
         |              Event Workers
@@ -62,7 +62,7 @@ AWS target: RDS PostgreSQL + ElastiCache Redis + ECS/Fargate or EC2.
 2. Treat canonical schemas as contracts between team members.
 3. Keep vendor-specific logic inside connectors.
 4. Keep PostgreSQL as the source of truth for durable business state.
-5. Use RabbitMQ for durable asynchronous event processing.
+5. Use Redis (Pub/Sub & List Queue) for unified event messaging per ADR-003.
 6. Use Redis for cache/realtime fanout/transient state, not as the only durable event store.
 7. Keep AI behind a service/interface boundary.
 8. Keep media streaming separate from business APIs.
@@ -87,7 +87,7 @@ Create the project skeleton and freeze the integration contracts before parallel
 - VMS schema
 - Candidate-event schema
 - Investigation/evidence schema
-- RabbitMQ message envelope
+- Redis event message envelope
 - WebSocket event names
 - Standard error response
 - Authentication/RBAC model
@@ -213,7 +213,7 @@ Turn heterogeneous VMS events into one durable event pipeline.
 - Source event IDs
 - Idempotency/deduplication
 - PostgreSQL persistence
-- RabbitMQ producer
+- Redis producer (sentinel:events / sentinel:queue)
 - Retry policy
 - Dead-letter handling
 
@@ -234,7 +234,7 @@ Validate + Deduplicate
 +-------> PostgreSQL
  |
 v
-RabbitMQ
+Redis (Pub/Sub & List Queue)
 ```
 
 ## Exit Criteria
@@ -404,7 +404,7 @@ Provide frontend-ready responses without requiring the UI to understand internal
 
 ## Exit Criteria
 
-The frontend can build the main dashboard with a small number of backend calls and does not need to query RabbitMQ/PostgreSQL/Redis directly.
+The frontend can build the main dashboard with a small number of backend calls and does not need to query PostgreSQL or Redis directly.
 
 ---
 
@@ -478,7 +478,7 @@ ECS/Fargate or EC2
         |
         +---- RDS PostgreSQL
         +---- ElastiCache Redis
-        +---- RabbitMQ
+        +---- Redis (ElastiCache / Redis 7)
 ```
 
 ## Build
@@ -487,7 +487,7 @@ ECS/Fargate or EC2
 - Environment-specific configuration
 - RDS connection
 - ElastiCache connection
-- RabbitMQ deployment/connection
+- Redis deployment/connection
 - ECS/Fargate or EC2 deployment
 - Secrets management
 - TLS
@@ -497,7 +497,7 @@ ECS/Fargate or EC2
 
 ## Exit Criteria
 
-A clean deployment can start all required services, reach RDS/Redis/RabbitMQ, expose the API, and pass smoke tests.
+A clean deployment can start all required services, reach RDS/Redis, expose the API, and pass smoke tests.
 
 ---
 
@@ -520,7 +520,7 @@ Unified camera registry
 Vehicle event
    |
    v
-RabbitMQ
+Redis (Pub/Sub & List Queue)
    |
    v
 Correlation
@@ -580,7 +580,7 @@ Own:
 Own:
 
 - event workers
-- RabbitMQ
+- Redis Pub/Sub & List Queue
 - correlation rules
 - candidate generation
 
@@ -601,7 +601,7 @@ Own:
 
 - RDS
 - ElastiCache
-- RabbitMQ infrastructure
+- Redis infrastructure
 - Docker
 - ECS/Fargate or EC2
 - monitoring/logging
@@ -644,7 +644,7 @@ VMS event
    ↓
 normalize
    ↓
-RabbitMQ
+Redis (sentinel:queue)
    ↓
 worker
    ↓
@@ -684,7 +684,7 @@ Gateway
    ↓
 FastAPI
    ↓
-RDS / Redis / RabbitMQ
+RDS / Redis
 ```
 
 ---
@@ -698,7 +698,7 @@ The backend is considered ready for the hackathon demo when:
 - [ ] Camera status is tracked.
 - [ ] Events use a canonical schema.
 - [ ] Duplicate source events are safely handled.
-- [ ] RabbitMQ processing works end-to-end.
+- [x] Redis processing works end-to-end (sentinel:queue / sentinel:events / sentinel:queue:dlq).
 - [ ] Correlation produces candidate events.
 - [ ] Candidate confidence is reproducible from stored inputs.
 - [ ] AI results can enrich events/candidates.

@@ -31,7 +31,7 @@ Normalizer
   ↓
 Message publisher
   ↓
-RabbitMQ
+Redis (Pub/Sub & List Queue)
   ↓
 Worker
   ↓

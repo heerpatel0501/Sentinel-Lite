@@ -22,16 +22,6 @@ services:
       - "6379:6379"
     restart: always
 
-  rabbitmq:
-    image: rabbitmq:3-management-alpine
-    container_name: sentinel_rabbitmq
-    environment:
-      RABBITMQ_DEFAULT_USER: sentinel
-      RABBITMQ_DEFAULT_PASS: sentinel_pw
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-    restart: always
 
   backend:
     build: ./backend

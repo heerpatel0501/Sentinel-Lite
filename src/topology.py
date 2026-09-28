@@ -1,59 +1,76 @@
 """
-Idempotently declares the RabbitMQ topology described in README.md:
+Redis Messaging Topology Manager (ADR-003).
 
-  sentinel.raw_events (topic)          -> event_processing.raw   (Member 3 consumes)
-  sentinel.processed_events (topic)    -> dashboard.processed    (Member 4 consumes)
-                                        -> ai_analytics.processed (Member 6 consumes)
-  sentinel.raw_events.dlx (fanout)     -> event_processing.dlq
+Declares and verifies the unified Redis messaging topology for Sentinel-Lite:
+  - Realtime Fanout (Redis Pub/Sub): sentinel:events
+  - Ingestion / Worker Queue (Redis List): sentinel:queue
+  - Dead Letter Queue (Redis List): sentinel:queue:dlq
 
-Run with:  python -m src.topology
+Replaces legacy RabbitMQ topology per ADR-003.
 """
 
+from __future__ import annotations
+
 import logging
+from typing import Any, Dict, Optional
 
-from src.rabbitmq_client import RabbitMQClient, load_config
+from src.redis_client import RedisClient, load_config
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("sentinel.topology")
 
 
-def declare_topology(client: RabbitMQClient) -> None:
-    cfg = client.config
-    ch = client.connect()
+def declare_topology(client: Optional[Any] = None) -> Dict[str, Any]:
+    """
+    Verifies and initializes the Redis messaging topology for Sentinel-Lite.
+    Returns a dictionary summarizing active channels, queues, and queue lengths.
+    """
+    if client is None:
+        client = RedisClient(load_config())
 
-    ex = cfg["exchanges"]
-    q = cfg["queues"]
+    if hasattr(client, "connect") and not getattr(client, "_connected", False):
+        client.connect()
 
-    # Dead-letter exchange + queue first, so raw queue can reference it
-    ch.exchange_declare(exchange=ex["dead_letter"], exchange_type="fanout", durable=True)
-    ch.queue_declare(queue=q["dead_letter"], durable=True)
-    ch.queue_bind(queue=q["dead_letter"], exchange=ex["dead_letter"])
+    channel = getattr(client, "channel", "sentinel:events")
+    queue = getattr(client, "queue", "sentinel:queue")
+    dlq = getattr(client, "dlq", "sentinel:queue:dlq")
 
-    # Raw events exchange + queue (consumed by Member 3)
-    ch.exchange_declare(exchange=ex["raw_events"], exchange_type="topic", durable=True)
-    ch.queue_declare(
-        queue=q["raw_processing"],
-        durable=True,
-        arguments={
-            "x-dead-letter-exchange": ex["dead_letter"],
-        },
-    )
-    ch.queue_bind(queue=q["raw_processing"], exchange=ex["raw_events"], routing_key="#")
+    is_connected = getattr(client, "_connected", False)
+    topology_info: Dict[str, Any] = {
+        "mode": "redis" if is_connected else "in-memory fallback",
+        "channel": channel,
+        "queue": queue,
+        "dlq": dlq,
+        "queue_length": 0,
+        "dlq_length": 0,
+    }
 
-    # Processed events exchange + downstream queues (Member 4, Member 6)
-    ch.exchange_declare(exchange=ex["processed_events"], exchange_type="topic", durable=True)
-    ch.queue_declare(queue=q["dashboard"], durable=True)
-    ch.queue_bind(queue=q["dashboard"], exchange=ex["processed_events"], routing_key="#")
+    if is_connected and getattr(client, "_client", None) is not None:
+        try:
+            topology_info["queue_length"] = client._client.llen(queue)
+            topology_info["dlq_length"] = client._client.llen(dlq)
+            logger.info("Redis Messaging Topology (ADR-003) verified:")
+            logger.info("  Ingestion Queue (Redis List):   %s (length: %d)", queue, topology_info["queue_length"])
+            logger.info("  Realtime Fanout (Redis Pub/Sub): %s", channel)
+            logger.info("  Dead Letter Queue (Redis List):  %s (length: %d)", dlq, topology_info["dlq_length"])
+        except Exception as exc:
+            logger.warning("Error inspecting Redis queue metrics: %s", exc)
+    else:
+        logger.info("Redis unavailable; development in-memory fallback active.")
+        logger.info("Configured topology: Queue: %s | Pub/Sub: %s | DLQ: %s", queue, channel, dlq)
 
-    ch.queue_declare(queue=q["ai_analytics"], durable=True)
-    ch.queue_bind(queue=q["ai_analytics"], exchange=ex["processed_events"], routing_key="#")
-
-    logger.info("Topology declared successfully:")
-    logger.info("  Exchanges: %s", list(ex.values()))
-    logger.info("  Queues:    %s", list(q.values()))
+    return topology_info
 
 
 if __name__ == "__main__":
-    client = RabbitMQClient(load_config())
-    declare_topology(client)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    client = RedisClient(load_config())
+    info = declare_topology(client)
+    print("\n" + "=" * 60)
+    print("SENTINEL-LITE REDIS TOPOLOGY STATUS (ADR-003)")
+    print("=" * 60)
+    print(f"Execution Mode:       {info['mode'].upper()}")
+    print(f"Pub/Sub Channel:      {info['channel']}")
+    print(f"Worker Queue:         {info['queue']} (length: {info['queue_length']})")
+    print(f"Dead Letter Queue:    {info['dlq']} (length: {info['dlq_length']})")
+    print("=" * 60 + "\n")
     client.close()

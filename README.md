@@ -344,18 +344,20 @@ Developed for the **I-Hub Gujarat Hackathon**.
 
 # Member 3 — Event Processing + Correlation (Sentinel Lite)
 
-Owns: **event normalization, RabbitMQ messaging, and correlation** between
+Owns: **event normalization, Redis messaging (Pub/Sub + Queues), and correlation** between
 raw events coming from Member 2 (VMS/CCTV) and sensors, producing enriched
-"correlated incident" events for Member 4 (dashboard) and Member 6 (AI/analytics).
+"candidate/correlated incident" events for Member 4 (dashboard/WebSocket) and Member 6 (AI/analytics).
+
+> **Architecture Note (ADR-003)**: Redis is the unified real-time event and queue broker. RabbitMQ has been retired to eliminate dual-broker operational complexity.
 
 ```
-Member 2 (cameras/sensors) --publish raw--> RabbitMQ --consume--> Member 3
-                                                                     |
-                                                        normalize -> correlate
-                                                                     |
-                                                          publish processed
-                                                                     |
-                                              RabbitMQ --consume--> Member 4 / Member 6
+Member 2 (cameras/sensors) --publish raw--> Redis (sentinel:queue) --consume--> Member 3
+                                                                                    |
+                                                                       normalize -> correlate
+                                                                                    |
+                                                                         publish processed
+                                                                                    |
+                                                    Redis Pub/Sub (sentinel:events) --fanout--> Member 4 / Member 6
 ```
 
 ## 1. Folder structure
@@ -364,13 +366,13 @@ Member 2 (cameras/sensors) --publish raw--> RabbitMQ --consume--> Member 3
 sentinel-lite-event-processor/
 ├── README.md
 ├── requirements.txt
-├── docker-compose.yml          # RabbitMQ (with management UI)
+├── docker-compose.yml          # Redis 7 Alpine
 ├── config/
 │   └── config.yaml             # exchange/queue names, correlation window, rules
 ├── src/
 │   ├── __init__.py
 │   ├── models.py                # RawEvent / NormalizedEvent / CorrelatedIncident schemas
-│   ├── rabbitmq_client.py       # connection + publish/consume helpers (with retry)
+│   ├── redis_client.py          # Redis client (Pub/Sub, queue, DLQ)
 │   ├── topology.py              # declares exchanges/queues/bindings + DLQ
 │   ├── normalizer.py            # vendor-specific -> canonical event mapping
 │   ├── correlation_engine.py    # sliding time-window correlation rules
@@ -391,13 +393,11 @@ sentinel-lite-event-processor/
 
 ## 2. Step-by-step setup
 
-### Step 1 — Start RabbitMQ
+### Step 1 — Start Redis
 ```bash
-docker compose up -d
+docker compose up -d redis
 ```
-This starts RabbitMQ with the management UI at http://localhost:15672
-(user: `sentinel`, pass: `sentinel_pw` — change in `docker-compose.yml` for anything
-beyond local dev).
+This starts Redis 7 Alpine at `localhost:6379`.
 
 ### Step 2 — Create a virtualenv and install dependencies
 ```bash
@@ -406,12 +406,11 @@ source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### Step 3 — Declare the RabbitMQ topology (exchanges, queues, DLQ)
+### Step 3 — Verify Redis Connection
 ```bash
-python -m src.topology
+python -c "import redis; r = redis.from_url('redis://localhost:6379/0'); print('Redis ping:', r.ping())"
 ```
-This is idempotent — safe to re-run any time (e.g. after a RabbitMQ restart
-with a fresh volume).
+Verifies live Redis connectivity or falls back to in-memory mode if Redis is offline.
 
 ### Step 4 — Start the event processor (consumer + normalizer + correlator + producer)
 ```bash
@@ -433,21 +432,15 @@ once enough related events land inside the correlation window.
 pytest tests/ -v
 ```
 
-## 3. RabbitMQ topology
+## 3. Redis Messaging Topology (ADR-003)
 
-| Component | Name | Type | Notes |
+| Component | Key / Channel | Type | Notes |
 |---|---|---|---|
-| Exchange | `sentinel.raw_events` | topic | Member 2 publishes raw camera/sensor events here |
-| Exchange | `sentinel.processed_events` | topic | Member 3 publishes normalized + correlated events here |
-| Exchange | `sentinel.raw_events.dlx` | fanout | Dead-letter exchange for poison messages |
-| Queue | `event_processing.raw` | — | Bound to `sentinel.raw_events` with routing key `#`, consumed by Member 3 |
-| Queue | `event_processing.dlq` | — | Bound to the DLX, holds messages that failed processing after retries |
-| Queue | `dashboard.processed` | — | Bound to `sentinel.processed_events` with `#` (Member 4 consumes) |
-| Queue | `ai_analytics.processed` | — | Bound to `sentinel.processed_events` with `#` (Member 6 consumes) |
+| Ingestion Queue | `sentinel:queue` | Redis List | Ingestion queue consumed by EventWorker / Member 3 |
+| Realtime Fanout | `sentinel:events` | Redis Pub/Sub | Realtime broadcast channel subscribed by WebSocket bridge / Dashboard |
+| Dead Letter Queue | `sentinel:queue:dlq` | Redis List | Holds poison messages and payloads failing after max retries |
 
-Routing key convention: `<source_type>.<event_type>`, e.g. `camera.motion_detected`,
-`sensor.door_opened`. Processed events use `normalized.<event_type>` or
-`correlated.<incident_type>`.
+Routing conventions: Processed events use `normalized.<event_type>` or `correlated.<incident_type>`. Realtime WebSocket messages are broadcasted via `sentinel:events`.
 
 ## 4. Correlation logic (summary)
 

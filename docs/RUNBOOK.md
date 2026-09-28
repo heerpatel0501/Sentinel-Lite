@@ -27,9 +27,7 @@ API
  ↓
 PostgreSQL
  ↓
-RabbitMQ
- ↓
-Redis
+Redis (Pub/Sub & List Queue)
  ↓
 VMS connectors
  ↓
@@ -53,7 +51,8 @@ Actions:
 ## 4. Event backlog
 
 Check:
-- RabbitMQ queue depth;
+- Redis queue depth (`sentinel:queue` via `/api/v1/queue/stats` or `LLEN sentinel:queue`);
+- DLQ depth (`sentinel:queue:dlq`);
 - worker health;
 - database latency;
 - malformed-message/dead-letter volume.

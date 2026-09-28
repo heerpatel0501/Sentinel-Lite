@@ -4,8 +4,8 @@
 2. **Vendor-specific code stays inside connectors.**
 3. **Core domain code consumes canonical models.**
 4. **PostgreSQL is the durable source of truth.**
-5. **RabbitMQ handles durable asynchronous work.**
-6. **Redis handles cache/realtime/transient workloads.**
+5. **Redis handles unified messaging: Pub/Sub for realtime fanout and list queues for durable worker processing with DLQ (ADR-003; RabbitMQ retired).**
+6. **Redis handles cache/realtime workloads; PostgreSQL remains the permanent authoritative record (ADR-004).**
 7. **Never block an API request on long-running AI/video work.**
 8. **All state-changing privileged actions are audited.**
 9. **Never expose VMS credentials through ordinary APIs.**

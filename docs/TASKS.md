@@ -88,7 +88,7 @@
 - [x] Structured JSON access logging (timestamp, method, path, status, duration, client, request_id)
 - [x] Application metrics endpoint (/metrics — request counts, latency, error rates, top endpoints)
 - [x] Readiness probe (/ready — database connectivity + schema check for K8s/ECS)
-- [x] Event worker queue (RabbitMQ production / in-memory dev fallback)
+- [x] Event worker queue (Redis Pub/Sub & List Queue production / in-memory dev fallback per ADR-003)
 - [x] Dead-letter queue (DLQ) for failed event processing
 - [x] Exponential backoff retry on event processing failures
 - [x] Event queue stats endpoint (GET /api/v1/queue/stats)

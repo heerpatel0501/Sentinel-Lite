@@ -60,17 +60,23 @@ class EventWindowStore:
 
 class CorrelationEngine:
     def __init__(self, config: dict):
-        c = config["correlation"]
-        self.window_seconds = c["window_seconds"]
-        self.loitering_motion_threshold = c["loitering_motion_threshold"]
-        self.loitering_window_seconds = c["loitering_window_seconds"]
-        self.tailgate_line_crossing_threshold = c["tailgate_line_crossing_threshold"]
-        self.tailgate_window_seconds = c["tailgate_window_seconds"]
-        self.confidence_boost = c["confidence_boost_per_event"]
-        self.max_confidence = c["max_confidence"]
+        c = config.get("correlation", config)
+        self.window_seconds = c.get("window_seconds", 30)
+        self.loitering_motion_threshold = c.get("loitering_motion_threshold", 3)
+        self.loitering_window_seconds = c.get("loitering_window_seconds", 60)
+        self.tailgate_line_crossing_threshold = c.get("tailgate_line_crossing_threshold", 2)
+        self.tailgate_window_seconds = c.get("tailgate_window_seconds", 8)
+        self.motion_camera_threshold = c.get("motion_correlation_camera_threshold", 2)
+        self.cross_dept_threshold = c.get("cross_dept_threshold", 2)
+        self.confidence_boost = c.get("confidence_boost_per_event", 0.1)
+        self.max_confidence = c.get("max_confidence", 1.0)
 
         # Use the largest window needed by any rule so the store retains enough history.
-        widest = max(self.window_seconds, self.loitering_window_seconds, self.tailgate_window_seconds)
+        widest = max(
+            self.window_seconds,
+            self.loitering_window_seconds,
+            self.tailgate_window_seconds
+        )
         self.store = EventWindowStore(max_window_seconds=widest)
 
         # Dedup: avoid re-raising the same incident type for the same zone
@@ -84,7 +90,13 @@ class CorrelationEngine:
         window = self.store.add(event)
         incidents: List[CorrelatedIncident] = []
 
-        for rule in (self._rule_intrusion, self._rule_loitering, self._rule_tailgating):
+        for rule in (
+            self._rule_intrusion,
+            self._rule_loitering,
+            self._rule_tailgating,
+            self._rule_cross_camera_motion,
+            self._rule_cross_department_plate,
+        ):
             incident = rule(event, window)
             if incident and not self._is_on_cooldown(incident):
                 incidents.append(incident)
@@ -93,14 +105,16 @@ class CorrelationEngine:
         return incidents
 
     def _is_on_cooldown(self, incident: CorrelatedIncident) -> bool:
-        key = f"{incident.zone_id}:{incident.incident_type}"
+        plate = incident.metadata.get("plate_text", "")
+        key = f"{incident.zone_id}:{incident.incident_type}:{plate}"
         last_fired = self._recent_incidents.get(key)
         if last_fired is None:
             return False
         return (_parse_ts(incident.last_seen) - last_fired) < self._incident_cooldown
 
     def _mark_fired(self, incident: CorrelatedIncident) -> None:
-        key = f"{incident.zone_id}:{incident.incident_type}"
+        plate = incident.metadata.get("plate_text", "")
+        key = f"{incident.zone_id}:{incident.incident_type}:{plate}"
         self._recent_incidents[key] = _parse_ts(incident.last_seen)
 
     def _score(self, base_confidences: List[float]) -> float:
@@ -214,3 +228,120 @@ class CorrelationEngine:
                 summary=summary,
             )
         return None
+
+    # ------------------------------------------------------------------ #
+    # Rule 4: Multi-Camera Motion Correlation
+    #   Related motion/vehicle events observed across >= N distinct cameras
+    #   within the zone window.
+    # ------------------------------------------------------------------ #
+    def _rule_cross_camera_motion(self, event: NormalizedEvent, window: List[NormalizedEvent]) -> Optional[CorrelatedIncident]:
+        valid_motion_types = {"motion_detected", "vehicle_detection", "line_crossing", "object_left"}
+        if event.event_type not in valid_motion_types:
+            return None
+
+        cutoff = _parse_ts(event.timestamp) - timedelta(seconds=self.window_seconds)
+        recent_motions = [
+            e for e in window
+            if e.event_type in valid_motion_types
+            and _parse_ts(e.timestamp) >= cutoff
+        ]
+
+        distinct_cameras = {}
+        for e in recent_motions:
+            if e.camera_or_sensor_id not in distinct_cameras:
+                distinct_cameras[e.camera_or_sensor_id] = e
+
+        if len(distinct_cameras) >= self.motion_camera_threshold:
+            contributing = list(distinct_cameras.values())
+            camera_ids = list(distinct_cameras.keys())
+            confidence = self._score([e.confidence for e in contributing])
+            summary = (
+                f"Multi-camera motion sequence tracked across {len(camera_ids)} cameras "
+                f"({', '.join(camera_ids)}) in zone '{event.zone_id}' within {self.window_seconds}s."
+            )
+            metadata = {
+                "camera_ids": camera_ids,
+                "source_event_ids": [e.origin_event_id or e.event_id for e in contributing],
+                "timestamps": [e.timestamp for e in contributing],
+                "event_types": [e.event_type for e in contributing],
+                "correlation_reason": "Sequential motion tracking across multiple camera viewpoints",
+                "candidate_status": "candidate",
+            }
+            return CorrelatedIncident.new(
+                incident_type="cross_camera_motion",
+                zone_id=event.zone_id,
+                confidence=confidence,
+                contributing=contributing,
+                summary=summary,
+                metadata=metadata,
+            )
+        return None
+
+    # ------------------------------------------------------------------ #
+    # Rule 5: Cross-Department Plate Sightings
+    #   Target vehicle plate observed across >= 2 distinct departments
+    #   within the correlation window.
+    # ------------------------------------------------------------------ #
+    def _rule_cross_department_plate(self, event: NormalizedEvent, window: List[NormalizedEvent]) -> Optional[CorrelatedIncident]:
+        plate = (
+            event.attributes.get("plate_text")
+            or event.attributes.get("plate")
+            or event.attributes.get("plate_number")
+        )
+        if not plate:
+            return None
+
+        clean_plate = str(plate).strip().upper().replace(" ", "").replace("-", "")
+        cutoff = _parse_ts(event.timestamp) - timedelta(seconds=self.window_seconds)
+
+        matching_events = []
+        dept_map = {}
+        for e in window:
+            if _parse_ts(e.timestamp) < cutoff:
+                continue
+            e_plate = (
+                e.attributes.get("plate_text")
+                or e.attributes.get("plate")
+                or e.attributes.get("plate_number")
+            )
+            if not e_plate:
+                continue
+            if str(e_plate).strip().upper().replace(" ", "").replace("-", "") == clean_plate:
+                matching_events.append(e)
+                dept = (
+                    e.attributes.get("department")
+                    or e.attributes.get("source_department")
+                    or e.source_type
+                )
+                if dept:
+                    dept_map[str(dept)] = e
+
+        if len(dept_map) >= self.cross_dept_threshold:
+            contributing = matching_events
+            depts = sorted(list(dept_map.keys()))
+            cams = sorted(list(set(e.camera_or_sensor_id for e in contributing)))
+            confidence = self._score([e.confidence for e in contributing])
+            summary = (
+                f"Cross-department sighting of plate '{plate}' tracked across "
+                f"{len(depts)} departments ({', '.join(depts)}) at cameras {', '.join(cams)}."
+            )
+            metadata = {
+                "plate_text": plate,
+                "departments": depts,
+                "camera_ids": cams,
+                "source_event_ids": [e.origin_event_id or e.event_id for e in contributing],
+                "timestamps": [e.timestamp for e in contributing],
+                "event_types": [e.event_type for e in contributing],
+                "correlation_reason": f"Cross-department target sighting across {', '.join(depts)}",
+                "candidate_status": "candidate",
+            }
+            return CorrelatedIncident.new(
+                incident_type="cross_department_sighting",
+                zone_id=event.zone_id,
+                confidence=confidence,
+                contributing=contributing,
+                summary=summary,
+                metadata=metadata,
+            )
+        return None
+

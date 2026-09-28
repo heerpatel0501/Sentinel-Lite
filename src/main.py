@@ -1,5 +1,5 @@
 """
-Entrypoint for Member 3's Event Processing + Correlation service.
+Entrypoint for Member 3's Event Processing + Correlation service (Redis mode per ADR-003).
 
 Usage:
     python -m src.main
@@ -8,7 +8,7 @@ Usage:
 import logging
 
 from src.consumer import EventProcessor
-from src.rabbitmq_client import RabbitMQClient, load_config
+from src.redis_client import RedisClient, load_config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -19,10 +19,11 @@ logger = logging.getLogger("sentinel.main")
 
 def main() -> None:
     config = load_config()
-    client = RabbitMQClient(config)
+    client = RedisClient(config)
+    client.connect()
     processor = EventProcessor(client)
 
-    logger.info("Sentinel Lite — Event Processing + Correlation service starting...")
+    logger.info("Sentinel Lite — Event Processing + Correlation service starting (Redis mode)...")
     try:
         processor.run()
     except KeyboardInterrupt:

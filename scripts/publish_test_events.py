@@ -1,12 +1,14 @@
 """
-Simulates Member 2 (VMS/CCTV integration) publishing raw events onto
-`sentinel.raw_events`, so Member 3's pipeline can be exercised end-to-end
-without real cameras/sensors.
+Simulates Member 2 (VMS/CCTV integration) publishing raw events onto Redis
+(`sentinel:queue` and `sentinel:events`), so Member 3's pipeline can be exercised
+end-to-end with real Redis or offline fallback without requiring real cameras/sensors.
 
 Usage:
     python scripts/publish_test_events.py --scenario intrusion
     python scripts/publish_test_events.py --scenario loitering
     python scripts/publish_test_events.py --scenario tailgating
+    python scripts/publish_test_events.py --scenario cross_camera
+    python scripts/publish_test_events.py --scenario cross_dept_plate
     python scripts/publish_test_events.py --scenario normal
 """
 
@@ -19,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.rabbitmq_client import RabbitMQClient, load_config  # noqa: E402
+from src.redis_client import RedisClient, load_config  # noqa: E402
 
 
 def now_plus(seconds: float) -> str:
@@ -64,30 +66,39 @@ SCENARIOS = {
         make_event("camera_lobby_01", "camera", "motion_detected", "zone_lobby", 1.0),
         make_event("door_sensor_lobby_north", "sensor", "DoorOpen", "zone_lobby", 2.0),
     ],
+    # multi-camera motion correlation -> cross_camera_motion
+    "cross_camera": [
+        make_event("cam_junction_01", "camera", "motion_detected", "zone_crossroad", 0.0),
+        make_event("cam_traffic_02", "camera", "motion_detected", "zone_crossroad", 3.0),
+        make_event("cam_highway_03", "camera", "vehicle_detection", "zone_crossroad", 6.0),
+    ],
+    # cross-department plate sighting -> cross_department_sighting
+    "cross_dept_plate": [
+        make_event("traffic_cam_01", "camera", "plate_recognition", "zone_highway", 0.0, metadata={"plate": "GJ01-AB-1234", "department": "RTO"}),
+        make_event("police_cam_02", "camera", "plate_recognition", "zone_highway", 5.0, metadata={"plate": "GJ01-AB-1234", "department": "Police"}),
+    ],
 }
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--scenario", choices=SCENARIOS.keys(), default="intrusion")
-    parser.add_argument("--delay", type=float, default=1.0, help="seconds between publishes")
+    parser.add_argument("--delay", type=float, default=0.5, help="seconds between publishes")
     args = parser.parse_args()
 
     config = load_config()
-    client = RabbitMQClient(config)
+    client = RedisClient(config)
     client.connect()
-    exchange = config["exchanges"]["raw_events"]
 
     events = SCENARIOS[args.scenario]
-    print(f"Publishing {len(events)} events for scenario '{args.scenario}'...")
+    print(f"Publishing {len(events)} events for scenario '{args.scenario}' to Redis...")
     for event in events:
-        routing_key = f"{event['source_type']}.{event['event_type'].lower()}"
-        client.publish(exchange, routing_key, event)
+        client.publish(client.channel, event)
         print(f"  -> published {event['event_type']} from {event['source']} (zone={event['zone_id']})")
         time.sleep(args.delay)
 
     client.close()
-    print("Done. Check the src.main terminal for normalized events / correlated incidents.")
+    print("Done. Check event worker / backend logs for normalized events and correlated candidate incidents.")
 
 
 if __name__ == "__main__":
